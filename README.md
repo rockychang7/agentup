@@ -132,6 +132,30 @@ agentup doctor
 agentup version
 ```
 
+### 卸载 agentup
+
+#### 方式一：使用内置命令
+
+```bash
+agentup uninstall
+```
+
+自动删除二进制文件并清理 PATH（Windows）。
+
+#### 方式二：使用卸载脚本
+
+Windows (PowerShell)：
+
+```powershell
+irm https://raw.githubusercontent.com/rockychang7/agentup/main/uninstall.ps1 | iex
+```
+
+macOS / Linux：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rockychang7/agentup/main/uninstall.sh | bash
+```
+
 ## 升级策略
 
 根据检测到的安装方式自动选择升级命令：
@@ -157,7 +181,8 @@ agentup/
 │   ├── list.go                     # agentup list
 │   ├── upgrade.go                  # agentup upgrade [tool]
 │   ├── doctor.go                   # agentup doctor
-│   └── version.go                  # agentup version
+│   ├── version.go                  # agentup version
+│   └── uninstall.go                # agentup uninstall
 ├── internal/
 │   ├── model/
 │   │   └── model.go                # 核心数据结构 (ToolInfo, UpgradeResult 等)
@@ -182,6 +207,11 @@ agentup/
 ├── pkg/
 │   └── table/
 │       └── table.go                # 表格输出格式化
+├── install.ps1                     # Windows 一键安装脚本
+├── install.sh                      # macOS/Linux 一键安装脚本
+├── uninstall.ps1                   # Windows 卸载脚本
+├── uninstall.sh                    # macOS/Linux 卸载脚本
+├── .goreleaser.yml                 # GoReleaser 跨平台编译配置
 └── go.mod
 ```
 

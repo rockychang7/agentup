@@ -51,6 +51,7 @@ Available Commands:
   upgrade   Upgrade one or all installed tools
   doctor    Run environment diagnostics
   version   Show agentup version
+  uninstall Uninstall agentup from your system
 
 Use "agentup [command] --help" for more information about a command.`,
 }
@@ -81,4 +82,5 @@ func init() {
 	rootCmd.AddCommand(upgradeCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(uninstallCmd)
 }
