@@ -18,7 +18,7 @@ type Platform interface {
 
 // NewPlatform returns the Platform implementation for the current OS.
 // This function is implemented in darwin.go, windows.go, or other.go
-// depending on the build target.
+// (Linux) depending on the build target.
 func NewPlatform() Platform {
 	return newPlatform()
 }

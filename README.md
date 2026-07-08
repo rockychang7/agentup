@@ -17,7 +17,7 @@
 |------|------|
 | macOS | ✅ 已支持 |
 | Windows | ✅ 已支持 |
-| Linux | ⚠️ 代码结构已预留，未完整测试 |
+| Linux | ✅ 已支持 |
 
 ## 支持的工具
 
@@ -247,14 +247,20 @@ go test ./... -v
 ### 跨平台编译
 
 ```bash
-# macOS
-GOOS=darwin GOARCH=amd64 go build -o agentup-darwin .
+# macOS (Intel)
+GOOS=darwin GOARCH=amd64 go build -o agentup-darwin-amd64 .
+
+# macOS (Apple Silicon)
+GOOS=darwin GOARCH=arm64 go build -o agentup-darwin-arm64 .
 
 # Windows
 GOOS=windows GOARCH=amd64 go build -o agentup.exe .
 
-# Linux
-GOOS=linux GOARCH=amd64 go build -o agentup-linux .
+# Linux (amd64)
+GOOS=linux GOARCH=amd64 go build -o agentup-linux-amd64 .
+
+# Linux (arm64)
+GOOS=linux GOARCH=arm64 go build -o agentup-linux-arm64 .
 ```
 
 ## 已知限制
@@ -263,7 +269,6 @@ GOOS=linux GOARCH=amd64 go build -o agentup-linux .
 - **不支持自动定时升级**：需要手动执行
 - **不管理 API Key**：不涉及账号登录和 API Key 管理
 - **不管理模型配置**：不涉及模型切换和代理配置
-- **Linux 支持有限**：代码结构已预留，但未完整测试
 - **Agy CLI 不支持自动升级**：Agy 仅支持通过安装脚本安装，无法通过包管理器升级
 
 ## 许可证

@@ -2,30 +2,30 @@
 
 package platform
 
-// otherPlatform is the fallback implementation for unsupported OSes
-// (e.g. Linux). It preserves the extension point for future Linux support.
-type otherPlatform struct{}
+// linuxPlatform is the Linux implementation of Platform.
+// It supports npm, pnpm, yarn, and Homebrew (Linuxbrew).
+type linuxPlatform struct{}
 
 func newPlatform() Platform {
-	return &otherPlatform{}
+	return &linuxPlatform{}
 }
 
-func (p *otherPlatform) Name() string {
-	return "Linux (unsupported)"
+func (p *linuxPlatform) Name() string {
+	return "Linux"
 }
 
-func (p *otherPlatform) SupportedManagers() []string {
-	return []string{"npm", "pnpm", "yarn"}
+func (p *linuxPlatform) SupportedManagers() []string {
+	return []string{"npm", "pnpm", "yarn", "brew"}
 }
 
-func (p *otherPlatform) IsBrewSupported() bool {
+func (p *linuxPlatform) IsBrewSupported() bool {
+	return true
+}
+
+func (p *linuxPlatform) IsWingetSupported() bool {
 	return false
 }
 
-func (p *otherPlatform) IsWingetSupported() bool {
-	return false
-}
-
-func (p *otherPlatform) IsScoopSupported() bool {
+func (p *linuxPlatform) IsScoopSupported() bool {
 	return false
 }
