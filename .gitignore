@@ -1,0 +1,28 @@
+# Binaries
+agentup
+agentup.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build output
+/dist/
+
+# Test binary
+*.test
+
+# Go coverage
+*.out
+coverage.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.qoder/
+
+# OS
+.DS_Store
+Thumbs.db
