@@ -54,4 +54,4 @@ changelog:
 release:
   draft: false
   prerelease: auto
-  name_template: "{{.TagName}}"
+  name_template: "{{.Tag}}"
