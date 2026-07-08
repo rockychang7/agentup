@@ -26,7 +26,7 @@
 | Codex CLI | `codex` | `@openai/codex` | `codex` (cask) | - | - | ✅ |
 | Claude Code CLI | `claude` | `@anthropic-ai/claude-code` | `claude-code` (cask) | - | - | ✅ |
 | OpenCode CLI | `opencode` | `opencode-ai` | `opencode` | `opencode` | - | ✅ |
-| Agy CLI | `agy` | - | - | - | - | ❌ (仅支持手动安装) |
+| Agy CLI | `agy` | - | - | - | - | ✅ (self-update) |
 
 ## 安装
 
@@ -269,7 +269,6 @@ GOOS=linux GOARCH=arm64 go build -o agentup-linux-arm64 .
 - **不支持自动定时升级**：需要手动执行
 - **不管理 API Key**：不涉及账号登录和 API Key 管理
 - **不管理模型配置**：不涉及模型切换和代理配置
-- **Agy CLI 不支持自动升级**：Agy 仅支持通过安装脚本安装，无法通过包管理器升级
 
 ## 许可证
 
