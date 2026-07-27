@@ -9,27 +9,31 @@ import (
 	"agentup/internal/detector"
 	"agentup/internal/platform"
 	"agentup/internal/runner"
+	"agentup/internal/selfupdate"
 	"agentup/internal/upgrader"
 )
 
 // Version is the current version of agentup.
 // This value is injected at build time via ldflags:
-//   -ldflags "-X agentup/cmd.Version=v0.1.0"
+//
+//	-ldflags "-X agentup/cmd.Version=0.2.0"
 var Version = "dev"
 
 // Global instances shared across commands.
 var (
-	appRunner   runner.Runner
-	appPlatform platform.Platform
-	appDetector *detector.Detector
-	appUpgrader *upgrader.Upgrader
-	appTools    []config.ToolConfig
+	appRunner      runner.Runner
+	appPlatform    platform.Platform
+	appDetector    *detector.Detector
+	appUpgrader    *upgrader.Upgrader
+	appSelfUpdater selfUpdater
+	appTools       []config.ToolConfig
 )
 
 // rootCmd is the base command.
 var rootCmd = &cobra.Command{
-	Use:   "agentup",
-	Short: "Unified CLI tool for detecting and upgrading AI coding agent CLIs",
+	Use:          "agentup",
+	Short:        "Unified CLI tool for detecting and upgrading AI coding agent CLIs",
+	SilenceUsage: true,
 	Long: `agentup is a cross-platform CLI tool for detecting and upgrading
 locally installed AI coding agent CLI tools.
 
@@ -49,6 +53,7 @@ Usage:
 Available Commands:
   list      List all supported tools and their installation status
   upgrade   Upgrade one or all installed tools
+  update    Update agentup to the latest release
   doctor    Run environment diagnostics
   version   Show agentup version
   uninstall Uninstall agentup from your system
@@ -64,7 +69,7 @@ func Execute() {
 	}
 }
 
-// initGlobals initializes the shared runner, platform, detector, and upgrader.
+// initGlobals initializes the shared services used by commands.
 func initGlobals() {
 	appRunner = &runner.DefaultRunner{}
 	appPlatform = platform.NewPlatform()
@@ -74,12 +79,14 @@ func initGlobals() {
 	// upgradeDetector skips latest version check to avoid network overhead during upgrades
 	upgradeDetector := detector.NewWithoutLatestCheck(appRunner, appPlatform, appTools)
 	appUpgrader = upgrader.New(appRunner, appPlatform, upgradeDetector, appTools, os.Stdout)
+	appSelfUpdater = selfupdate.New(Version)
 }
 
 // init registers all subcommands with the root command.
 func init() {
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(upgradeCmd)
+	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(uninstallCmd)

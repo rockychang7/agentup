@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"agentup/internal/config"
 	"agentup/internal/detector"
@@ -20,7 +21,10 @@ type Upgrader struct {
 	detector *detector.Detector
 	tools    []config.ToolConfig
 	output   io.Writer // progress messages are written here
+	outputMu sync.Mutex
 }
+
+const maxConcurrentUpgrades = 4
 
 // New creates a new Upgrader with the given runner, platform, detector, tools,
 // and output writer for progress messages. If output is nil, progress
@@ -43,14 +47,36 @@ func New(r runner.Runner, p platform.Platform, det *detector.Detector, tools []c
 // If one tool fails to upgrade, it does not affect the others.
 // Progress messages are written to the output writer.
 func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
-	results := make([]model.UpgradeResult, 0, len(u.tools))
+	results := make([]model.UpgradeResult, len(u.tools))
 	total := len(u.tools)
+	if total == 0 {
+		return results
+	}
+
+	type upgradeJob struct {
+		index int
+		tool  config.ToolConfig
+	}
+
+	workerCount := min(total, maxConcurrentUpgrades)
+	jobs := make(chan upgradeJob, total)
+	var wg sync.WaitGroup
+
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				results[job.index] = u.upgradeToolWithProgress(job.tool, job.index+1, total)
+			}
+		}()
+	}
 
 	for i, tool := range u.tools {
-		index := i + 1
-		result := u.upgradeToolWithProgress(tool, index, total)
-		results = append(results, result)
+		jobs <- upgradeJob{index: i, tool: tool}
 	}
+	close(jobs)
+	wg.Wait()
 
 	return results
 }
@@ -69,10 +95,17 @@ func (u *Upgrader) Upgrade(name model.ToolName) (model.UpgradeResult, error) {
 // upgradeToolWithProgress wraps upgradeTool with progress output.
 func (u *Upgrader) upgradeToolWithProgress(tool config.ToolConfig, index, total int) model.UpgradeResult {
 	// Pre-detect to get info for progress message
-	info, _ := u.detector.Detect(tool.Name)
+	info, err := u.detector.Detect(tool.Name)
+	if err != nil {
+		return model.UpgradeResult{
+			Name:    tool.Name,
+			Status:  model.UpgradeStatusSkipped,
+			Message: fmt.Sprintf("detection failed: %v", err),
+		}
+	}
 
 	if !info.Installed {
-		fmt.Fprintf(u.output, "[%d/%d] %s: not installed, skipping\n", index, total, tool.Name)
+		u.writeProgress("[%d/%d] %s: not installed, skipping\n", index, total, tool.Name)
 		return model.UpgradeResult{
 			Name:    tool.Name,
 			Status:  model.UpgradeStatusSkipped,
@@ -82,13 +115,13 @@ func (u *Upgrader) upgradeToolWithProgress(tool config.ToolConfig, index, total 
 
 	// Print progress before upgrade starts
 	methodLabel := string(info.InstallMethod)
-	fmt.Fprintf(u.output, "[%d/%d] Upgrading %s (%s)...\n", index, total, tool.Name, methodLabel)
+	u.writeProgress("[%d/%d] Upgrading %s (%s)...\n", index, total, tool.Name, methodLabel)
 
-	return u.upgradeTool(tool)
+	return u.upgradeTool(tool, info)
 }
 
 // upgradeTool performs the upgrade for a single tool.
-func (u *Upgrader) upgradeTool(tool config.ToolConfig) model.UpgradeResult {
+func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) model.UpgradeResult {
 	result := model.UpgradeResult{
 		Name:       tool.Name,
 		Status:     model.UpgradeStatusSkipped,
@@ -97,34 +130,22 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig) model.UpgradeResult {
 		Message:    "",
 	}
 
-	// Step 1: Detect current state
-	info, err := u.detector.Detect(tool.Name)
-	if err != nil {
-		result.Message = fmt.Sprintf("detection failed: %v", err)
-		return result
-	}
-
-	if !info.Installed {
-		result.Message = "not installed"
-		return result
-	}
-
 	result.OldVersion = info.Version
 
-	// Step 2: Check if upgrade is supported
+	// Step 1: Check if upgrade is supported
 	if !tool.UpgradeSupported {
 		result.Message = fmt.Sprintf("automatic upgrade not supported, please upgrade manually: %s", tool.ManualUpgradeURL)
 		return result
 	}
 
-	// Step 3: Check if install method supports upgrade
+	// Step 2: Check if install method supports upgrade
 	if info.InstallMethod == model.InstallMethodBinary || info.InstallMethod == model.InstallMethodUnknown {
 		result.Message = fmt.Sprintf("install method is '%s', cannot auto-upgrade. Please upgrade manually: %s",
 			info.InstallMethod, tool.ManualUpgradeURL)
 		return result
 	}
 
-	// Step 4: Build and execute the upgrade command
+	// Step 3: Build and execute the upgrade command
 	cmdName, cmdArgs, err := u.buildUpgradeCommand(tool, info.InstallMethod, info.Path)
 	if err != nil {
 		result.Status = model.UpgradeStatusFailed
@@ -144,11 +165,11 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig) model.UpgradeResult {
 		return result
 	}
 
-	// Step 5: Re-detect to get the new version
+	// Step 4: Re-detect to get the new version
 	newInfo, _ := u.detector.Detect(tool.Name)
 	result.NewVersion = newInfo.Version
 
-	// Step 6: Determine success
+	// Step 5: Determine success
 	if result.NewVersion != result.OldVersion && result.NewVersion != "unknown" {
 		result.Status = model.UpgradeStatusSuccess
 	} else if result.NewVersion == "unknown" {
@@ -162,6 +183,12 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig) model.UpgradeResult {
 	}
 
 	return result
+}
+
+func (u *Upgrader) writeProgress(format string, args ...any) {
+	u.outputMu.Lock()
+	defer u.outputMu.Unlock()
+	fmt.Fprintf(u.output, format, args...)
 }
 
 // buildUpgradeCommand constructs the upgrade command based on install method.

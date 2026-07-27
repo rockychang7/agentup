@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 // Runner is the interface for executing external commands.
@@ -59,6 +60,8 @@ type MockResult struct {
 // MockRunner is a test double for Runner. It allows setting up
 // preset results for specific commands.
 type MockRunner struct {
+	mu sync.Mutex
+
 	// Results maps "name arg1 arg2..." to preset results.
 	// If no exact match, falls back to results keyed by just the command name.
 	Results map[string]MockResult
@@ -79,7 +82,10 @@ type MockCall struct {
 
 // Run returns a preset result for the given command.
 func (m *MockRunner) Run(name string, args ...string) (stdout, stderr string, exitCode int, err error) {
-	m.Calls = append(m.Calls, MockCall{Name: name, Args: args})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.Calls = append(m.Calls, MockCall{Name: name, Args: append([]string(nil), args...)})
 
 	// Try exact match with args first
 	key := name
@@ -101,6 +107,9 @@ func (m *MockRunner) Run(name string, args ...string) (stdout, stderr string, ex
 
 // LookPath returns a preset path result.
 func (m *MockRunner) LookPath(file string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if result, ok := m.LookPathResults[file]; ok {
 		return result.Path, result.Err
 	}
@@ -110,7 +119,7 @@ func (m *MockRunner) LookPath(file string) (string, error) {
 // NewMockRunner creates a new MockRunner with empty result maps.
 func NewMockRunner() *MockRunner {
 	return &MockRunner{
-		Results:         make(map[string]MockResult),
+		Results: make(map[string]MockResult),
 		LookPathResults: make(map[string]struct {
 			Path string
 			Err  error
@@ -120,6 +129,9 @@ func NewMockRunner() *MockRunner {
 
 // SetResult sets a preset result for a command (with args).
 func (m *MockRunner) SetResult(name string, args []string, result MockResult) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	key := name
 	if len(args) > 0 {
 		key = name + " " + strings.Join(args, " ")
@@ -129,11 +141,17 @@ func (m *MockRunner) SetResult(name string, args []string, result MockResult) {
 
 // SetResultByName sets a preset result for a command (by name only, no args).
 func (m *MockRunner) SetResultByName(name string, result MockResult) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.Results[name] = result
 }
 
 // SetLookPath sets a preset LookPath result for a file.
 func (m *MockRunner) SetLookPath(file string, path string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.LookPathResults[file] = struct {
 		Path string
 		Err  error

@@ -19,25 +19,29 @@ var upgradeCmd = &cobra.Command{
 If no tool name is specified, all installed tools are upgraded.
 If a tool name is specified, only that tool is upgraded.
 
-Supported tool names: codex, claude-code, opencode, agy
+Supported tool names: codex, claude-code, opencode, agy, agentup
 
 Examples:
   agentup upgrade              # Upgrade all installed tools
   agentup upgrade codex        # Upgrade only codex
-  agentup upgrade claude-code  # Upgrade only claude-code`,
+  agentup upgrade claude-code  # Upgrade only claude-code
+  agentup upgrade agentup      # Upgrade agentup itself`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			// Upgrade all installed tools
 			fmt.Println("Upgrading installed agents...")
 			results := appUpgrader.UpgradeAll()
 			table.PrintUpgradeResults(results)
 			fmt.Println("\nDone.")
-			return
+			return nil
 		}
 
 		// Upgrade a specific tool
 		toolName := args[0]
+		if toolName == "agentup" {
+			return runSelfUpdate(cmd, false)
+		}
 
 		// Validate tool name
 		if !model.IsValidToolName(toolName) {
@@ -46,13 +50,13 @@ Examples:
 			for _, t := range model.SupportedTools() {
 				fmt.Printf("  - %s\n", t)
 			}
-			return
+			fmt.Println("  - agentup")
+			return nil
 		}
 
 		result, err := appUpgrader.Upgrade(model.ToolName(toolName))
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return
+			return err
 		}
 
 		// Print single result
@@ -67,5 +71,6 @@ Examples:
 				fmt.Printf("\nHint: %s\n", result.Message)
 			}
 		}
+		return nil
 	},
 }

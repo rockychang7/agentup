@@ -6,10 +6,11 @@
 
 - **一键查看**：列出所有支持的 AI Coding Agent CLI 工具的安装状态、版本、安装方式和路径
 - **自动识别安装方式**：识别 npm、pnpm、yarn、Homebrew、winget、scoop 等安装方式
-- **一键升级**：自动使用对应的包管理器升级所有已安装的工具
+- **并行升级**：自动使用对应的包管理器并行升级所有已安装的工具
 - **指定升级**：单独升级某个工具
+- **自身升级**：从 GitHub Releases 下载并校验最新版，直接升级 agentup
 - **环境诊断**：检查当前环境是否具备升级能力
-- **跨平台**：支持 macOS 和 Windows
+- **跨平台**：支持 macOS、Linux 和 Windows
 
 ## 支持的平台
 
@@ -55,7 +56,8 @@ curl -fsSL https://raw.githubusercontent.com/rockychang7/agentup/main/install.sh
 | Windows | `agentup_<version>_windows_amd64.zip` |
 | macOS (Intel) | `agentup_<version>_darwin_amd64.tar.gz` |
 | macOS (Apple Silicon) | `agentup_<version>_darwin_arm64.tar.gz` |
-| Linux | `agentup_<version>_linux_amd64.tar.gz` |
+| Linux (x86_64) | `agentup_<version>_linux_amd64.tar.gz` |
+| Linux (ARM64) | `agentup_<version>_linux_arm64.tar.gz` |
 
 ### 方式三：从源码编译
 
@@ -96,6 +98,8 @@ agy           yes         0.3.5     binary           /opt/homebrew/bin/agy      
 agentup upgrade
 ```
 
+所有已安装工具会并行执行升级，最终汇总仍按工具列表顺序展示。
+
 示例输出：
 
 ```text
@@ -131,6 +135,22 @@ agentup doctor
 ```bash
 agentup version
 ```
+
+### 升级 agentup
+
+```bash
+agentup update
+```
+
+也可以使用与其他工具一致的命令：
+
+```bash
+agentup upgrade agentup
+```
+
+agentup 会下载当前系统和架构对应的最新 Release，并使用发布的 `checksums.txt` 校验 SHA-256 后替换当前可执行文件。Windows 会在命令退出后完成替换。
+
+`v0.1.0` 尚未内置自身升级能力，需要重新运行一次安装脚本升级到 `v0.2.0`；从 `v0.2.0` 开始可直接使用上述命令升级后续版本。
 
 ### 卸载 agentup
 
@@ -180,6 +200,7 @@ agentup/
 │   ├── root.go                     # 根命令 + 全局初始化
 │   ├── list.go                     # agentup list
 │   ├── upgrade.go                  # agentup upgrade [tool]
+│   ├── update.go                   # agentup 自升级
 │   ├── doctor.go                   # agentup doctor
 │   ├── version.go                  # agentup version
 │   └── uninstall.go                # agentup uninstall
@@ -202,8 +223,10 @@ agentup/
 │   │   ├── winget.go               # winget 安装检测
 │   │   ├── scoop.go                # scoop 安装检测
 │   │   └── binary.go               # 手动 binary 安装检测 (fallback)
-│   └── upgrader/
-│       └── upgrader.go             # 升级逻辑 + 命令构建 + 错误分类
+│   ├── upgrader/
+│   │   └── upgrader.go             # 升级逻辑 + 命令构建 + 错误分类
+│   └── selfupdate/
+│       └── selfupdate.go           # agentup Release 下载、校验和自身升级
 ├── pkg/
 │   └── table/
 │       └── table.go                # 表格输出格式化

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"agentup/internal/config"
 	"agentup/internal/detector"
@@ -21,8 +23,8 @@ type testPlatform struct {
 func (p *testPlatform) Name() string                { return p.name }
 func (p *testPlatform) SupportedManagers() []string { return p.managers }
 func (p *testPlatform) IsBrewSupported() bool       { return false }
-func (p *testPlatform) IsWingetSupported() bool      { return false }
-func (p *testPlatform) IsScoopSupported() bool       { return false }
+func (p *testPlatform) IsWingetSupported() bool     { return false }
+func (p *testPlatform) IsScoopSupported() bool      { return false }
 
 func macPlatform() *testPlatform {
 	return &testPlatform{
@@ -202,7 +204,7 @@ func TestUpgrade_BinaryInstallMethodSkipped(t *testing.T) {
 	})
 	// npm available but codex not in npm
 	mr.SetResult("npm", []string{"--version"}, runner.MockResult{
-		Stdout: "11.0.0\n",
+		Stdout:   "11.0.0\n",
 		ExitCode: 0,
 	})
 	mr.SetResult("npm", []string{"list", "-g", "@openai/codex", "--depth=0"}, runner.MockResult{
@@ -297,6 +299,110 @@ func TestUpgradeAll_OneFailureDoesNotAffectOthers(t *testing.T) {
 			t.Errorf("expected claude-code to fail, got '%s' (msg: %s)", claudeResult.Status, claudeResult.Message)
 		} else {
 			t.Error("claude-code result not found")
+		}
+	}
+}
+
+type blockingUpgradeRunner struct {
+	mu      sync.Mutex
+	started chan string
+	release chan struct{}
+	active  int
+	maxSeen int
+}
+
+func (r *blockingUpgradeRunner) Run(name string, args ...string) (string, string, int, error) {
+	if len(args) == 1 && args[0] == "--version" {
+		return "1.0.0\n", "", 0, nil
+	}
+
+	if len(args) == 1 && args[0] == "update" {
+		r.mu.Lock()
+		r.active++
+		if r.active > r.maxSeen {
+			r.maxSeen = r.active
+		}
+		r.mu.Unlock()
+
+		r.started <- name
+		<-r.release
+
+		r.mu.Lock()
+		r.active--
+		r.mu.Unlock()
+		return "", "", 0, nil
+	}
+
+	return "", "", -1, fmt.Errorf("unexpected command: %s %v", name, args)
+}
+
+func (r *blockingUpgradeRunner) LookPath(file string) (string, error) {
+	return "/mock/" + file, nil
+}
+
+func (r *blockingUpgradeRunner) maxActive() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.maxSeen
+}
+
+func TestUpgradeAll_RunsToolsInParallel(t *testing.T) {
+	br := &blockingUpgradeRunner{
+		started: make(chan string, 2),
+		release: make(chan struct{}),
+	}
+	tools := []config.ToolConfig{
+		{
+			Name:             model.ToolName("tool-a"),
+			BinaryName:       "tool-a",
+			VersionArgs:      []string{"--version"},
+			BinaryOnly:       true,
+			SelfUpdateArgs:   []string{"update"},
+			UpgradeSupported: true,
+		},
+		{
+			Name:             model.ToolName("tool-b"),
+			BinaryName:       "tool-b",
+			VersionArgs:      []string{"--version"},
+			BinaryOnly:       true,
+			SelfUpdateArgs:   []string{"update"},
+			UpgradeSupported: true,
+		},
+	}
+	p := &testPlatform{name: "test"}
+	det := detector.NewWithoutLatestCheck(br, p, tools)
+	up := New(br, p, det, tools, io.Discard)
+
+	done := make(chan []model.UpgradeResult, 1)
+	go func() {
+		done <- up.UpgradeAll()
+	}()
+
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+
+	for started := 0; started < len(tools); started++ {
+		select {
+		case <-br.started:
+		case <-timer.C:
+			close(br.release)
+			<-done
+			t.Fatal("expected upgrade commands to run concurrently")
+		}
+	}
+
+	close(br.release)
+	results := <-done
+
+	if br.maxActive() < 2 {
+		t.Fatalf("expected at least 2 concurrent upgrades, got %d", br.maxActive())
+	}
+	if len(results) != len(tools) {
+		t.Fatalf("expected %d results, got %d", len(tools), len(results))
+	}
+	for i, tool := range tools {
+		if results[i].Name != tool.Name {
+			t.Errorf("expected result %d to be %q, got %q", i, tool.Name, results[i].Name)
 		}
 	}
 }
