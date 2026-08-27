@@ -98,17 +98,27 @@ agy           yes         0.3.5     binary           /opt/homebrew/bin/agy      
 agentup upgrade
 ```
 
-所有已安装工具会并行执行升级，最终汇总仍按工具列表顺序展示。
+所有已安装工具会并行执行升级。任务编号按实际出现顺序从 1 递增，整体进度会在每个任务完成、跳过或失败时更新；最终汇总仍按工具列表顺序展示。
 
 示例输出：
 
 ```text
 Upgrading installed agents...
+Progress [------------------------]   0% (0/4 complete) | preparing
+[1/4] Upgrading agy (self-update)...
+[2/4] Upgrading codex (npm)...
+[3/4] opencode: not installed, skipping
+Progress [######------------------]  25% (1/4 complete) | opencode: skipped
+[4/4] Upgrading claude-code (npm)...
+Progress [############------------]  50% (2/4 complete) | agy: success
+Progress [##################------]  75% (3/4 complete) | codex: success
+Progress [########################] 100% (4/4 complete) | claude-code: success
 
+Summary:
 codex         success   0.12.3 -> 0.13.0
 claude-code   success   1.0.21 -> 1.0.25
 opencode      skipped   not installed
-agy           skipped   automatic upgrade not supported, please upgrade manually: https://antigravity.google/docs/cli-overview
+agy           success   0.3.5 -> 0.3.6
 
 Done.
 ```

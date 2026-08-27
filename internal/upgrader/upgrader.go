@@ -52,6 +52,8 @@ func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 	if total == 0 {
 		return results
 	}
+	progress := newUpgradeProgress(u.output, &u.outputMu, total)
+	progress.begin()
 
 	type upgradeJob struct {
 		index int
@@ -67,7 +69,7 @@ func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				results[job.index] = u.upgradeToolWithProgress(job.tool, job.index+1, total)
+				results[job.index] = u.upgradeToolWithProgress(job.tool, progress)
 			}
 		}()
 	}
@@ -77,6 +79,7 @@ func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 	}
 	close(jobs)
 	wg.Wait()
+	progress.finish()
 
 	return results
 }
@@ -86,38 +89,49 @@ func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 func (u *Upgrader) Upgrade(name model.ToolName) (model.UpgradeResult, error) {
 	for _, tool := range u.tools {
 		if tool.Name == name {
-			return u.upgradeToolWithProgress(tool, 1, 1), nil
+			progress := newUpgradeProgress(u.output, &u.outputMu, 1)
+			progress.begin()
+			result := u.upgradeToolWithProgress(tool, progress)
+			progress.finish()
+			return result, nil
 		}
 	}
 	return model.UpgradeResult{}, fmt.Errorf("unsupported tool: %s", name)
 }
 
 // upgradeToolWithProgress wraps upgradeTool with progress output.
-func (u *Upgrader) upgradeToolWithProgress(tool config.ToolConfig, index, total int) model.UpgradeResult {
+func (u *Upgrader) upgradeToolWithProgress(tool config.ToolConfig, progress *upgradeProgress) model.UpgradeResult {
 	// Pre-detect to get info for progress message
 	info, err := u.detector.Detect(tool.Name)
 	if err != nil {
-		return model.UpgradeResult{
+		progress.announce("%s: detection failed", tool.Name)
+		result := model.UpgradeResult{
 			Name:    tool.Name,
 			Status:  model.UpgradeStatusSkipped,
 			Message: fmt.Sprintf("detection failed: %v", err),
 		}
+		progress.complete(result)
+		return result
 	}
 
 	if !info.Installed {
-		u.writeProgress("[%d/%d] %s: not installed, skipping\n", index, total, tool.Name)
-		return model.UpgradeResult{
+		progress.announce("%s: not installed, skipping", tool.Name)
+		result := model.UpgradeResult{
 			Name:    tool.Name,
 			Status:  model.UpgradeStatusSkipped,
 			Message: "not installed",
 		}
+		progress.complete(result)
+		return result
 	}
 
 	// Print progress before upgrade starts
 	methodLabel := string(info.InstallMethod)
-	u.writeProgress("[%d/%d] Upgrading %s (%s)...\n", index, total, tool.Name, methodLabel)
+	progress.announce("Upgrading %s (%s)...", tool.Name, methodLabel)
 
-	return u.upgradeTool(tool, info)
+	result := u.upgradeTool(tool, info)
+	progress.complete(result)
+	return result
 }
 
 // upgradeTool performs the upgrade for a single tool.
@@ -183,12 +197,6 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) mode
 	}
 
 	return result
-}
-
-func (u *Upgrader) writeProgress(format string, args ...any) {
-	u.outputMu.Lock()
-	defer u.outputMu.Unlock()
-	fmt.Fprintf(u.output, format, args...)
 }
 
 // buildUpgradeCommand constructs the upgrade command based on install method.

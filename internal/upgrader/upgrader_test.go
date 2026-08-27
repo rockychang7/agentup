@@ -407,6 +407,94 @@ func TestUpgradeAll_RunsToolsInParallel(t *testing.T) {
 	}
 }
 
+type orderedAppearanceRunner struct {
+	releaseSlow chan struct{}
+	releaseOnce sync.Once
+}
+
+func (r *orderedAppearanceRunner) Run(name string, args ...string) (string, string, int, error) {
+	if len(args) == 1 && args[0] == "--version" {
+		return "1.0.0\n", "", 0, nil
+	}
+	if len(args) == 1 && args[0] == "update" {
+		if name == "/mock/fast" {
+			r.releaseOnce.Do(func() {
+				close(r.releaseSlow)
+			})
+		}
+		return "", "", 0, nil
+	}
+	return "", "", -1, fmt.Errorf("unexpected command: %s %v", name, args)
+}
+
+func (r *orderedAppearanceRunner) LookPath(file string) (string, error) {
+	if file == "slow" {
+		<-r.releaseSlow
+	}
+	return "/mock/" + file, nil
+}
+
+func TestUpgradeAll_AssignsDisplayNumbersByAppearance(t *testing.T) {
+	output := &strings.Builder{}
+	or := &orderedAppearanceRunner{releaseSlow: make(chan struct{})}
+	tools := []config.ToolConfig{
+		{
+			Name:             model.ToolName("slow"),
+			BinaryName:       "slow",
+			VersionArgs:      []string{"--version"},
+			BinaryOnly:       true,
+			SelfUpdateArgs:   []string{"update"},
+			UpgradeSupported: true,
+		},
+		{
+			Name:             model.ToolName("fast"),
+			BinaryName:       "fast",
+			VersionArgs:      []string{"--version"},
+			BinaryOnly:       true,
+			SelfUpdateArgs:   []string{"update"},
+			UpgradeSupported: true,
+		},
+	}
+	p := &testPlatform{name: "test"}
+	det := detector.NewWithoutLatestCheck(or, p, tools)
+	up := New(or, p, det, tools, output)
+
+	results := up.UpgradeAll()
+	progressOutput := output.String()
+
+	if !strings.Contains(progressOutput, "[1/2] Upgrading fast (self-update)...") {
+		t.Fatalf("expected fast to receive display number 1, got output:\n%s", progressOutput)
+	}
+	if !strings.Contains(progressOutput, "[2/2] Upgrading slow (self-update)...") {
+		t.Fatalf("expected slow to receive display number 2, got output:\n%s", progressOutput)
+	}
+	if results[0].Name != model.ToolName("slow") || results[1].Name != model.ToolName("fast") {
+		t.Fatalf("expected summary results to preserve configured order, got %q then %q", results[0].Name, results[1].Name)
+	}
+}
+
+func TestUpgradeAll_PrintsOverallProgress(t *testing.T) {
+	mr := runner.NewMockRunner()
+	tools := config.DefaultTools()
+	p := macPlatform()
+	det := detector.NewWithoutLatestCheck(mr, p, tools)
+	output := &strings.Builder{}
+	up := New(mr, p, det, tools, output)
+
+	up.UpgradeAll()
+	progressOutput := output.String()
+
+	if !strings.Contains(progressOutput, "0% (0/4 complete)") {
+		t.Fatalf("expected initial progress, got output:\n%s", progressOutput)
+	}
+	if !strings.Contains(progressOutput, "100% (4/4 complete)") {
+		t.Fatalf("expected completed progress, got output:\n%s", progressOutput)
+	}
+	if strings.Count(progressOutput, "Progress ") != len(tools)+1 {
+		t.Fatalf("expected one initial and one completion progress line per tool, got output:\n%s", progressOutput)
+	}
+}
+
 func TestUpgrade_UnsupportedToolReturnsError(t *testing.T) {
 	mr := runner.NewMockRunner()
 	tools := config.DefaultTools()
