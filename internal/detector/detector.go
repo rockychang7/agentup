@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"agentup/internal/config"
 	"agentup/internal/model"
@@ -18,14 +20,14 @@ type Detector struct {
 	runner            runner.Runner
 	platform          platform.Platform
 	tools             []config.ToolConfig
-	enableLatestCheck bool // when true, detectTool queries registry for latest version
+	enableLatestCheck bool
 }
 
 // New creates a new Detector with the given runner, platform, and tool configs.
 // Latest version checking is enabled by default.
 func New(r runner.Runner, p platform.Platform, tools []config.ToolConfig) *Detector {
 	return &Detector{
-		runner:            r,
+		runner:            runner.WithTimeout(r, 15*time.Second),
 		platform:          p,
 		tools:             tools,
 		enableLatestCheck: true,
@@ -37,7 +39,7 @@ func New(r runner.Runner, p platform.Platform, tools []config.ToolConfig) *Detec
 // to avoid unnecessary network requests.
 func NewWithoutLatestCheck(r runner.Runner, p platform.Platform, tools []config.ToolConfig) *Detector {
 	return &Detector{
-		runner:            r,
+		runner:            runner.WithTimeout(r, 15*time.Second),
 		platform:          p,
 		tools:             tools,
 		enableLatestCheck: false,
@@ -46,11 +48,46 @@ func NewWithoutLatestCheck(r runner.Runner, p platform.Platform, tools []config.
 
 // DetectAll detects all configured tools and returns their info.
 func (d *Detector) DetectAll() []model.ToolInfo {
-	results := make([]model.ToolInfo, 0, len(d.tools))
-	for _, tool := range d.tools {
-		info := d.detectTool(tool)
-		results = append(results, info)
+	results := d.DetectAllLocal(nil)
+	if d.enableLatestCheck {
+		return d.CheckAllLatest(results, nil)
 	}
+	return results
+}
+
+// DetectAllLocal reports each completed detection without waiting for registry lookups.
+func (d *Detector) DetectAllLocal(onResult func(model.ToolInfo)) []model.ToolInfo {
+	results := make([]model.ToolInfo, len(d.tools))
+	var wg sync.WaitGroup
+	for i, tool := range d.tools {
+		wg.Add(1)
+		go func(i int, tool config.ToolConfig) {
+			defer wg.Done()
+			results[i] = d.detectLocal(tool)
+			if onResult != nil {
+				onResult(results[i])
+			}
+		}(i, tool)
+	}
+	wg.Wait()
+	return results
+}
+
+// CheckAllLatest keeps configured order and does not repeat local detection.
+func (d *Detector) CheckAllLatest(infos []model.ToolInfo, onResult func(model.ToolInfo)) []model.ToolInfo {
+	results := append([]model.ToolInfo{}, infos...)
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = d.CheckLatest(results[i])
+			if onResult != nil {
+				onResult(results[i])
+			}
+		}(i)
+	}
+	wg.Wait()
 	return results
 }
 
@@ -59,14 +96,18 @@ func (d *Detector) DetectAll() []model.ToolInfo {
 func (d *Detector) Detect(name model.ToolName) (model.ToolInfo, error) {
 	for _, tool := range d.tools {
 		if tool.Name == name {
-			return d.detectTool(tool), nil
+			info := d.detectLocal(tool)
+			if d.enableLatestCheck {
+				info = d.CheckLatest(info)
+			}
+			return info, nil
 		}
 	}
 	return model.ToolInfo{}, fmt.Errorf("unsupported tool: %s", name)
 }
 
-// detectTool performs the full detection for a single tool config.
-func (d *Detector) detectTool(tool config.ToolConfig) model.ToolInfo {
+// detectLocal never queries remote registries.
+func (d *Detector) detectLocal(tool config.ToolConfig) model.ToolInfo {
 	info := model.ToolInfo{
 		Name:             tool.Name,
 		Installed:        false,
@@ -74,6 +115,7 @@ func (d *Detector) detectTool(tool config.ToolConfig) model.ToolInfo {
 		InstallMethod:    model.InstallMethodUnknown,
 		Path:             "",
 		UpgradeSupported: tool.UpgradeSupported,
+		LatestCheck:      model.CheckOffline,
 	}
 
 	// Step 1: Check if the binary exists in PATH
@@ -112,16 +154,6 @@ func (d *Detector) detectTool(tool config.ToolConfig) model.ToolInfo {
 	} else if info.InstallMethod == model.InstallMethodBinary ||
 		info.InstallMethod == model.InstallMethodUnknown {
 		info.UpgradeSupported = false
-	}
-
-	// Step 5: Check latest version from registry (optional)
-	if d.enableLatestCheck {
-		info.LatestVersion = d.checkLatestVersion(tool, info.InstallMethod, info.Version)
-
-		// Step 6: Determine if an upgrade is available
-		if info.LatestVersion != "" && info.Version != "" && info.Version != "unknown" {
-			info.UpgradeAvailable = compareVersions(info.Version, info.LatestVersion) < 0
-		}
 	}
 
 	return info

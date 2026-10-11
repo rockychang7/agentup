@@ -2,7 +2,6 @@ package upgrader
 
 import (
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -70,7 +69,7 @@ func TestUpgrade_NpmToolSuccess(t *testing.T) {
 	tools := config.DefaultTools()
 	p := macPlatform()
 	det := detector.NewWithoutLatestCheck(mr, p, tools)
-	up := New(mr, p, det, tools, io.Discard)
+	up := New(mr, p, det, tools)
 
 	result, err := up.Upgrade(model.ToolCodex)
 	if err != nil {
@@ -103,7 +102,7 @@ func TestUpgrade_NotInstalledToolSkipped(t *testing.T) {
 	tools := config.DefaultTools()
 	p := macPlatform()
 	det := detector.NewWithoutLatestCheck(mr, p, tools)
-	up := New(mr, p, det, tools, io.Discard)
+	up := New(mr, p, det, tools)
 
 	result, err := up.Upgrade(model.ToolCodex)
 	if err != nil {
@@ -140,7 +139,7 @@ func TestUpgrade_AgySelfUpdateSuccess(t *testing.T) {
 	tools := config.DefaultTools()
 	p := macPlatform()
 	det := detector.NewWithoutLatestCheck(mr, p, tools)
-	up := New(mr, p, det, tools, io.Discard)
+	up := New(mr, p, det, tools)
 
 	result, err := up.Upgrade(model.ToolAgy)
 	if err != nil {
@@ -179,7 +178,7 @@ func TestUpgrade_UpgradeCommandFails(t *testing.T) {
 	tools := config.DefaultTools()
 	p := macPlatform()
 	det := detector.NewWithoutLatestCheck(mr, p, tools)
-	up := New(mr, p, det, tools, io.Discard)
+	up := New(mr, p, det, tools)
 
 	result, err := up.Upgrade(model.ToolCodex)
 	if err != nil {
@@ -218,7 +217,7 @@ func TestUpgrade_BinaryInstallMethodSkipped(t *testing.T) {
 	tools := config.DefaultTools()
 	p := macPlatform()
 	det := detector.NewWithoutLatestCheck(mr, p, tools)
-	up := New(mr, p, det, tools, io.Discard)
+	up := New(mr, p, det, tools)
 
 	result, _ := up.Upgrade(model.ToolCodex)
 	if result.Status != model.UpgradeStatusSkipped {
@@ -267,7 +266,7 @@ func TestUpgradeAll_OneFailureDoesNotAffectOthers(t *testing.T) {
 	tools := config.DefaultTools()
 	p := macPlatform()
 	det := detector.NewWithoutLatestCheck(mr, p, tools)
-	up := New(mr, p, det, tools, io.Discard)
+	up := New(mr, p, det, tools)
 
 	results := up.UpgradeAll()
 
@@ -371,7 +370,7 @@ func TestUpgradeAll_RunsToolsInParallel(t *testing.T) {
 	}
 	p := &testPlatform{name: "test"}
 	det := detector.NewWithoutLatestCheck(br, p, tools)
-	up := New(br, p, det, tools, io.Discard)
+	up := New(br, p, det, tools)
 
 	done := make(chan []model.UpgradeResult, 1)
 	go func() {
@@ -434,8 +433,7 @@ func (r *orderedAppearanceRunner) LookPath(file string) (string, error) {
 	return "/mock/" + file, nil
 }
 
-func TestUpgradeAll_AssignsDisplayNumbersByAppearance(t *testing.T) {
-	output := &strings.Builder{}
+func TestUpgradeAll_EmitsEventsAsTasksAdvance(t *testing.T) {
 	or := &orderedAppearanceRunner{releaseSlow: make(chan struct{})}
 	tools := []config.ToolConfig{
 		{
@@ -457,41 +455,50 @@ func TestUpgradeAll_AssignsDisplayNumbersByAppearance(t *testing.T) {
 	}
 	p := &testPlatform{name: "test"}
 	det := detector.NewWithoutLatestCheck(or, p, tools)
-	up := New(or, p, det, tools, output)
+	up := New(or, p, det, tools)
+	var mu sync.Mutex
+	var upgrading []model.ToolName
+	up.SetObserver(func(event model.UpgradeEvent) {
+		if event.Phase == model.PhaseUpgrading {
+			mu.Lock()
+			defer mu.Unlock()
+			upgrading = append(upgrading, event.Name)
+		}
+	})
 
 	results := up.UpgradeAll()
-	progressOutput := output.String()
-
-	if !strings.Contains(progressOutput, "[1/2] Upgrading fast (self-update)...") {
-		t.Fatalf("expected fast to receive display number 1, got output:\n%s", progressOutput)
-	}
-	if !strings.Contains(progressOutput, "[2/2] Upgrading slow (self-update)...") {
-		t.Fatalf("expected slow to receive display number 2, got output:\n%s", progressOutput)
+	if len(upgrading) != 2 || upgrading[0] != "fast" || upgrading[1] != "slow" {
+		t.Fatalf("expected fast to upgrade before slow detection finishes, got %v", upgrading)
 	}
 	if results[0].Name != model.ToolName("slow") || results[1].Name != model.ToolName("fast") {
 		t.Fatalf("expected summary results to preserve configured order, got %q then %q", results[0].Name, results[1].Name)
 	}
 }
 
-func TestUpgradeAll_PrintsOverallProgress(t *testing.T) {
+func TestUpgradeAll_EmitsCompletionForEveryTool(t *testing.T) {
 	mr := runner.NewMockRunner()
 	tools := config.DefaultTools()
 	p := macPlatform()
 	det := detector.NewWithoutLatestCheck(mr, p, tools)
-	output := &strings.Builder{}
-	up := New(mr, p, det, tools, output)
+	up := New(mr, p, det, tools)
+	var mu sync.Mutex
+	completed := make(map[model.ToolName]int)
+	up.SetObserver(func(event model.UpgradeEvent) {
+		if event.Phase == model.PhaseFinished {
+			mu.Lock()
+			defer mu.Unlock()
+			if event.Result == nil {
+				t.Error("completion event has no result")
+			}
+			completed[event.Name]++
+		}
+	})
 
 	up.UpgradeAll()
-	progressOutput := output.String()
-
-	if !strings.Contains(progressOutput, "0% (0/4 complete)") {
-		t.Fatalf("expected initial progress, got output:\n%s", progressOutput)
-	}
-	if !strings.Contains(progressOutput, "100% (4/4 complete)") {
-		t.Fatalf("expected completed progress, got output:\n%s", progressOutput)
-	}
-	if strings.Count(progressOutput, "Progress ") != len(tools)+1 {
-		t.Fatalf("expected one initial and one completion progress line per tool, got output:\n%s", progressOutput)
+	for _, tool := range tools {
+		if completed[tool.Name] != 1 {
+			t.Errorf("expected exactly one completion for %s, got %d", tool.Name, completed[tool.Name])
+		}
 	}
 }
 
@@ -500,7 +507,7 @@ func TestUpgrade_UnsupportedToolReturnsError(t *testing.T) {
 	tools := config.DefaultTools()
 	p := macPlatform()
 	det := detector.NewWithoutLatestCheck(mr, p, tools)
-	up := New(mr, p, det, tools, io.Discard)
+	up := New(mr, p, det, tools)
 
 	_, err := up.Upgrade(model.ToolName("nonexistent"))
 	if err == nil {

@@ -2,10 +2,12 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Runner is the interface for executing external commands.
@@ -21,16 +23,32 @@ type Runner interface {
 }
 
 // DefaultRunner is the production implementation of Runner using exec.Command.
-type DefaultRunner struct{}
+type DefaultRunner struct {
+	Context context.Context
+}
 
 // Run executes a command and captures stdout, stderr, and exit code.
 func (r *DefaultRunner) Run(name string, args ...string) (stdout, stderr string, exitCode int, err error) {
-	cmd := exec.Command(name, args...)
+	ctx := r.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return r.RunContext(ctx, name, args...)
+}
+
+func (r *DefaultRunner) RunContext(ctx context.Context, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	configureCancellation(cmd)
+	// Prevent a child that inherits the pipes from blocking cancellation indefinitely.
+	cmd.WaitDelay = time.Second
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
 	if runErr := cmd.Run(); runErr != nil {
+		if ctx.Err() != nil {
+			return stdoutBuf.String(), stderrBuf.String(), -1, ctx.Err()
+		}
 		// Try to extract exit code from the error
 		if exitErr, ok := runErr.(*exec.ExitError); ok {
 			return stdoutBuf.String(), stderrBuf.String(), exitErr.ExitCode(), nil
@@ -40,6 +58,31 @@ func (r *DefaultRunner) Run(name string, args ...string) (stdout, stderr string,
 	}
 
 	return stdoutBuf.String(), stderrBuf.String(), 0, nil
+}
+
+type timedRunner struct {
+	Runner
+	timeout time.Duration
+}
+
+// WithTimeout bounds production commands without changing the simple Runner test interface.
+func WithTimeout(r Runner, timeout time.Duration) Runner {
+	return &timedRunner{Runner: r, timeout: timeout}
+}
+
+func (r *timedRunner) Run(name string, args ...string) (string, string, int, error) {
+	if contextual, ok := r.Runner.(interface {
+		RunContext(context.Context, string, ...string) (string, string, int, error)
+	}); ok {
+		ctx := context.Background()
+		if base, ok := r.Runner.(*DefaultRunner); ok && base.Context != nil {
+			ctx = base.Context
+		}
+		ctx, cancel := context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+		return contextual.RunContext(ctx, name, args...)
+	}
+	return r.Runner.Run(name, args...)
 }
 
 // LookPath searches for an executable in the system PATH.

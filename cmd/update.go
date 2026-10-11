@@ -3,10 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"agentup/internal/model"
 	"agentup/internal/selfupdate"
+	"agentup/pkg/table"
 )
 
 type selfUpdater interface {
@@ -31,40 +34,64 @@ architecture, then verified against the published SHA-256 checksums.`,
 }
 
 func runSelfUpdate(cmd *cobra.Command, force bool) error {
-	output := cmd.OutOrStdout()
-	fmt.Fprintf(output, "Checking for agentup updates (current: %s)...\n", Version)
-
-	result, err := appSelfUpdater.Update(cmd.Context(), force)
-	if err != nil {
-		return fmt.Errorf("update agentup: %w", err)
+	p := printer(cmd)
+	var progress *table.Progress
+	started := time.Now()
+	if !outputFlags.JSON {
+		progressPrinter := p
+		if !p.Interactive {
+			progressPrinter = notices(cmd)
+		}
+		progress = table.NewProgress(progressPrinter, []model.ToolName{"agentup"})
+		progress.Observe(model.UpgradeEvent{Name: "agentup", Phase: model.PhaseUpgrading, Source: "GitHub"})
+		defer progress.Close()
 	}
 
+	result, err := appSelfUpdater.Update(commandContext(cmd), force)
+	if progress != nil {
+		progress.Close()
+	}
+	if err != nil {
+		if outputFlags.JSON {
+			if writeErr := writeJSON(cmd, map[string]any{"name": "agentup", "status": "failed", "error": err.Error()}); writeErr != nil {
+				return writeErr
+			}
+			return reportedError{err.Error()}
+		}
+		return fmt.Errorf("update agentup: %w", err)
+	}
+	if outputFlags.JSON {
+		return writeJSON(cmd, struct {
+			selfupdate.Result
+			Name           string `json:"name"`
+			DurationMillis int64  `json:"duration_ms"`
+		}{result, "agentup", time.Since(started).Milliseconds()})
+	}
+	p.Heading("AgentUp update", fmt.Sprintf("%s elapsed", table.Duration(time.Since(started).Milliseconds())))
+
 	if !result.Updated {
-		fmt.Fprintf(
-			output,
-			"agentup %s: %s (latest: %s).\n",
+		p.Line(fmt.Sprintf(
+			"agentup %s: %s (latest: %s).",
 			result.CurrentVersion,
 			result.SkippedReason,
 			result.LatestVersion,
-		)
+		))
 		return nil
 	}
 
 	if result.PendingRestart {
-		fmt.Fprintf(
-			output,
-			"Downloaded agentup %s. Installation will complete after this command exits.\n",
+		p.Line(fmt.Sprintf(
+			"Downloaded agentup %s. Installation will complete after this command exits.",
 			result.LatestVersion,
-		)
+		))
 		return nil
 	}
 
-	fmt.Fprintf(
-		output,
-		"Updated agentup from %s to %s.\n",
+	p.Line(fmt.Sprintf(
+		"Updated agentup from %s to %s.",
 		result.CurrentVersion,
 		result.LatestVersion,
-	)
+	))
 	return nil
 }
 

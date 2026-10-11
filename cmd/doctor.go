@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"agentup/internal/model"
-	"agentup/pkg/table"
+	"agentup/internal/runner"
 )
 
 // doctorCmd runs environment diagnostics.
@@ -22,9 +24,20 @@ This command checks:
 
 Example:
   agentup doctor`,
-	Run: func(cmd *cobra.Command, args []string) {
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if !outputFlags.JSON {
+			notices(cmd).Notice("Checking environment...")
+		}
 		result := runDoctor()
-		table.PrintDoctor(result)
+		if outputFlags.JSON {
+			if err := writeJSON(cmd, result); err != nil {
+				return err
+			}
+		} else {
+			printer(cmd).Doctor(result)
+		}
+		return commandContext(cmd).Err()
 	},
 }
 
@@ -49,15 +62,20 @@ func checkManagers() []model.ManagerInfo {
 			Found: false,
 		}
 
-		stdout, _, exitCode, err := appRunner.Run(name, "--version")
+		path, pathErr := appRunner.LookPath(name)
+		if pathErr != nil {
+			result = append(result, info)
+			continue
+		}
+		info.Path = path
+		stdout, stderr, exitCode, err := runner.WithTimeout(appRunner, 10*time.Second).Run(name, "--version")
 		if err == nil && exitCode == 0 {
 			info.Found = true
 			info.Version = parseManagerVersion(stdout)
-		}
-
-		// Try to get the path
-		if path, err := appRunner.LookPath(name); err == nil {
-			info.Path = path
+		} else if err != nil {
+			info.Error = err.Error()
+		} else {
+			info.Error = fmt.Sprintf("exit code %d: %s", exitCode, strings.TrimSpace(stderr))
 		}
 
 		result = append(result, info)
@@ -69,18 +87,17 @@ func checkManagers() []model.ManagerInfo {
 // checkTools checks which agent CLI tools are found in PATH.
 func checkTools() []model.ToolPathInfo {
 	result := make([]model.ToolPathInfo, 0, len(appTools))
-
-	for _, tool := range appTools {
+	for _, tool := range appDetector.DetectAllLocal(nil) {
 		info := model.ToolPathInfo{
 			Name:  tool.Name,
-			Found: false,
+			Found: tool.Installed,
+			Path:  tool.Path,
 		}
-
-		if path, err := appRunner.LookPath(tool.BinaryName); err == nil {
-			info.Found = true
-			info.Path = path
+		if tool.Installed && tool.Version == "unknown" {
+			info.Issue = "version could not be read; check the executable and PATH"
+		} else if tool.Installed && !tool.UpgradeSupported {
+			info.Issue = "automatic upgrade is unavailable for this install source; upgrade manually"
 		}
-
 		result = append(result, info)
 	}
 
@@ -113,5 +130,3 @@ func trimSpace(s string) string {
 func splitLines(s string) []string {
 	return strings.Split(s, "\n")
 }
-
-

@@ -32,12 +32,12 @@ const (
 
 // Result describes the outcome of an agentup self-update.
 type Result struct {
-	CurrentVersion string
-	LatestVersion  string
-	AssetName      string
-	Updated        bool
-	PendingRestart bool
-	SkippedReason  string
+	CurrentVersion string `json:"current_version"`
+	LatestVersion  string `json:"latest_version"`
+	AssetName      string `json:"asset_name,omitempty"`
+	Updated        bool   `json:"updated"`
+	PendingRestart bool   `json:"pending_restart"`
+	SkippedReason  string `json:"skipped_reason,omitempty"`
 }
 
 type releaseAsset struct {

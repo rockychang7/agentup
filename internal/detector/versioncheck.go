@@ -2,220 +2,197 @@ package detector
 
 import (
 	"encoding/json"
-	"strconv"
+	"fmt"
 	"strings"
+
+	"golang.org/x/mod/semver"
 
 	"agentup/internal/config"
 	"agentup/internal/model"
 )
 
-// checkLatestVersion queries the appropriate registry to find the latest
-// available version for the tool based on its install method.
-// Returns the latest version string, or "" if it could not be determined.
-// For package managers that only report "outdated" status (scoop, winget),
-// if the tool is NOT listed as outdated, the currentVersion is returned
-// (meaning it's already up to date).
-func (d *Detector) checkLatestVersion(tool config.ToolConfig, method model.InstallMethod, currentVersion string) string {
+// CheckLatest records failures separately from tools that have no registry lookup.
+func (d *Detector) CheckLatest(info model.ToolInfo) model.ToolInfo {
+	info.LatestVersion = ""
+	info.UpgradeAvailable = false
+	info.CheckMessage = ""
+	info.LatestCheck = model.CheckUnavailable
+	if !info.Installed {
+		return info
+	}
+	for _, tool := range d.tools {
+		if tool.Name != info.Name {
+			continue
+		}
+		latest, err := d.checkLatestVersion(tool, info.InstallMethod, info.Version)
+		if err != nil {
+			info.LatestCheck = model.CheckFailed
+			info.CheckMessage = err.Error()
+		} else if latest != "" {
+			info.LatestCheck = model.CheckOK
+			info.LatestVersion = latest
+			if validVersion(info.Version) {
+				info.UpgradeAvailable = compareVersions(info.Version, latest) < 0
+			}
+		} else {
+			info.CheckMessage = "no latest-version lookup for this installation source"
+		}
+		return info
+	}
+	return info
+}
+
+func (d *Detector) checkLatestVersion(tool config.ToolConfig, method model.InstallMethod, current string) (string, error) {
 	switch method {
 	case model.InstallMethodNpm, model.InstallMethodPnpm, model.InstallMethodYarn:
 		return d.checkNpmLatestVersion(tool)
 	case model.InstallMethodBrew:
 		return d.checkBrewLatestVersion(tool)
 	case model.InstallMethodScoop:
-		return d.checkScoopLatestVersion(tool, currentVersion)
+		return d.checkScoopLatestVersion(tool, current)
 	case model.InstallMethodWinget:
-		return d.checkWingetLatestVersion(tool, currentVersion)
+		return d.checkWingetLatestVersion(tool, current)
 	case model.InstallMethodSelfUpdate:
-		// For self-update tools, try npm registry if the package is on npm
 		if tool.NpmPackage != "" {
 			return d.checkNpmLatestVersion(tool)
 		}
-		return ""
-	default:
-		return ""
 	}
+	return "", nil
 }
 
-// checkNpmLatestVersion queries the npm registry for the latest version
-// of the package using `npm view <package> version`.
-func (d *Detector) checkNpmLatestVersion(tool config.ToolConfig) string {
+func (d *Detector) query(name string, args ...string) (string, error) {
+	stdout, stderr, code, err := d.runner.Run(name, args...)
+	if err != nil {
+		return "", fmt.Errorf("%s lookup: %w", name, err)
+	}
+	if code != 0 {
+		detail := strings.TrimSpace(stderr)
+		if detail == "" {
+			detail = fmt.Sprintf("exit code %d", code)
+		}
+		return "", fmt.Errorf("%s lookup failed: %s", name, detail)
+	}
+	return stdout, nil
+}
+
+func registryVersion(output string) (string, error) {
+	match := versionRegex.FindStringSubmatch(output)
+	if len(match) < 2 || !validVersion(match[1]) {
+		return "", fmt.Errorf("registry did not return a recognizable version")
+	}
+	return match[1], nil
+}
+
+func (d *Detector) checkNpmLatestVersion(tool config.ToolConfig) (string, error) {
 	if tool.NpmPackage == "" {
-		return ""
+		return "", nil
 	}
-	stdout, _, exitCode, err := d.runner.Run("npm", "view", tool.NpmPackage, "version")
-	if err != nil || exitCode != 0 {
-		return ""
+	out, err := d.query("npm", "view", tool.NpmPackage, "version")
+	if err != nil {
+		return "", err
 	}
-	return parseVersion(strings.TrimSpace(stdout))
+	return registryVersion(out)
 }
 
-// brewInfoJSON represents the JSON output of `brew info --json=v2`.
 type brewInfoJSON struct {
-	Formulae []brewFormula `json:"formulae"`
-	Casks    []brewCask    `json:"casks"`
+	Formulae []struct {
+		Name     string `json:"name"`
+		Versions struct {
+			Stable string `json:"stable"`
+		} `json:"versions"`
+	} `json:"formulae"`
+	Casks []struct {
+		Token   string `json:"token"`
+		Version string `json:"version"`
+	} `json:"casks"`
 }
 
-type brewFormula struct {
-	Name     string `json:"name"`
-	Versions struct {
-		Stable string `json:"stable"`
-	} `json:"versions"`
-}
-
-type brewCask struct {
-	Token   string `json:"token"`
-	Version string `json:"version"`
-}
-
-// checkBrewLatestVersion queries Homebrew for the latest version of the formula/cask.
-func (d *Detector) checkBrewLatestVersion(tool config.ToolConfig) string {
+func (d *Detector) checkBrewLatestVersion(tool config.ToolConfig) (string, error) {
 	if tool.BrewFormula == "" {
-		return ""
+		return "", nil
 	}
-	stdout, _, exitCode, err := d.runner.Run("brew", "info", "--json=v2", tool.BrewFormula)
-	if err != nil || exitCode != 0 {
-		return ""
+	out, err := d.query("brew", "info", "--json=v2", tool.BrewFormula)
+	if err != nil {
+		return "", err
 	}
-
 	var info brewInfoJSON
-	if err := json.Unmarshal([]byte(stdout), &info); err != nil {
-		return ""
+	if err := json.Unmarshal([]byte(out), &info); err != nil {
+		return "", fmt.Errorf("invalid Homebrew response: %w", err)
 	}
-
 	if tool.BrewCask {
 		for _, cask := range info.Casks {
 			if cask.Token == tool.BrewFormula {
-				return cask.Version
+				return registryVersion(cask.Version)
 			}
 		}
 	} else {
 		for _, formula := range info.Formulae {
 			if formula.Name == tool.BrewFormula {
-				return formula.Versions.Stable
+				return registryVersion(formula.Versions.Stable)
 			}
 		}
 	}
-	return ""
+	return "", fmt.Errorf("package missing from Homebrew response")
 }
 
-// checkScoopLatestVersion checks scoop status for available updates.
-// If the package is listed as outdated, the latest version is extracted.
-// If the package is NOT listed, it means it's up to date, so currentVersion is returned.
-func (d *Detector) checkScoopLatestVersion(tool config.ToolConfig, currentVersion string) string {
+func (d *Detector) checkScoopLatestVersion(tool config.ToolConfig, current string) (string, error) {
 	if tool.ScoopPackage == "" {
-		return ""
+		return "", nil
 	}
-	stdout, _, exitCode, err := d.runner.Run("scoop", "status")
-	if err != nil || exitCode != 0 {
-		// If scoop status fails, we can't determine the latest version
-		return ""
+	out, err := d.query("scoop", "status")
+	if err != nil {
+		return "", err
 	}
-
-	// If "up to date" message is in output, no updates available
-	lowerOutput := strings.ToLower(stdout)
-	if strings.Contains(lowerOutput, "up to date") || strings.Contains(lowerOutput, "everything is ok") {
-		return currentVersion
+	lower := strings.ToLower(out)
+	if strings.Contains(lower, "up to date") || strings.Contains(lower, "everything is ok") {
+		return registryVersion(current)
 	}
-
-	// Search for the package name in the output
-	// Output format varies, but typically includes lines like:
-	// "opencode   1.17.15 -> 1.18.0"
-	lowerPkg := strings.ToLower(tool.ScoopPackage)
-	lines := strings.Split(stdout, "\n")
-	for _, line := range lines {
-		if strings.Contains(strings.ToLower(line), lowerPkg) {
-			// Try to extract the version after "->"
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && strings.EqualFold(fields[0], tool.ScoopPackage) {
 			if idx := strings.Index(line, "->"); idx >= 0 {
-				afterArrow := strings.TrimSpace(line[idx+2:])
-				// Take the first token after "->"
-				parts := strings.Fields(afterArrow)
-				if len(parts) > 0 {
-					return parseVersion(parts[0])
-				}
+				return registryVersion(line[idx+2:])
 			}
-			// If no "->" found, try to extract the last version-like token
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				lastField := fields[len(fields)-1]
-				if v := parseVersion(lastField); v != "" {
-					return v
-				}
-			}
+			return "", fmt.Errorf("could not parse scoop update for %s", tool.ScoopPackage)
 		}
 	}
-
-	// Package not found in outdated list — it's up to date
-	return currentVersion
+	if strings.Contains(lower, "installed") && strings.Contains(lower, "latest") {
+		return registryVersion(current)
+	}
+	return "", fmt.Errorf("unrecognized scoop status response")
 }
 
-// checkWingetLatestVersion checks winget upgrade list for available updates.
-// If the package is listed, the available version is extracted.
-// If not listed, it means it's up to date, so currentVersion is returned.
-func (d *Detector) checkWingetLatestVersion(tool config.ToolConfig, currentVersion string) string {
+func (d *Detector) checkWingetLatestVersion(tool config.ToolConfig, current string) (string, error) {
 	if tool.WingetID == "" {
-		return ""
+		return "", nil
 	}
-	stdout, _, exitCode, err := d.runner.Run("winget", "upgrade")
-	if err != nil || exitCode != 0 {
-		return ""
+	out, err := d.query("winget", "upgrade")
+	if err != nil {
+		return "", err
 	}
-
-	// If "No updates" or "No installed package" message is in output
-	lowerOutput := strings.ToLower(stdout)
-	if strings.Contains(lowerOutput, "no updates") || strings.Contains(lowerOutput, "no package") {
-		return currentVersion
+	lower := strings.ToLower(out)
+	if strings.Contains(lower, "no updates") || strings.Contains(lower, "no available upgrade") {
+		return registryVersion(current)
 	}
-
-	// Search for the package ID in the output
-	lines := strings.Split(stdout, "\n")
-	for _, line := range lines {
-		if strings.Contains(strings.ToLower(line), strings.ToLower(tool.WingetID)) {
-			// winget upgrade output has columns: Name, Id, Version, Available
-			// Try to extract the last field as the available version
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				lastField := fields[len(fields)-1]
-				if v := parseVersion(lastField); v != "" {
-					return v
-				}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		for i, field := range fields {
+			if strings.EqualFold(field, tool.WingetID) && len(fields) > i+2 {
+				// Source may follow Available; do not mistake it for a version.
+				return registryVersion(fields[i+2])
 			}
 		}
 	}
-
-	// Package not found in upgrade list — it's up to date
-	return currentVersion
+	if strings.Contains(lower, "available") && strings.Contains(lower, "version") && strings.Contains(out, "---") {
+		return registryVersion(current)
+	}
+	return "", fmt.Errorf("unrecognized winget upgrade response")
 }
 
-// compareVersions compares two semantic version strings.
-// Returns -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2.
-// Pre-release and build metadata are stripped before comparison.
+func validVersion(v string) bool {
+	return semver.IsValid("v" + strings.TrimPrefix(v, "v"))
+}
+
 func compareVersions(v1, v2 string) int {
-	// Strip pre-release and build metadata
-	v1 = strings.Split(strings.Split(v1, "+")[0], "-")[0]
-	v2 = strings.Split(strings.Split(v2, "+")[0], "-")[0]
-
-	parts1 := strings.Split(v1, ".")
-	parts2 := strings.Split(v2, ".")
-
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		var n1, n2 int
-		if i < len(parts1) {
-			n1, _ = strconv.Atoi(parts1[i])
-		}
-		if i < len(parts2) {
-			n2, _ = strconv.Atoi(parts2[i])
-		}
-		if n1 < n2 {
-			return -1
-		}
-		if n1 > n2 {
-			return 1
-		}
-	}
-	return 0
+	return semver.Compare("v"+strings.TrimPrefix(v1, "v"), "v"+strings.TrimPrefix(v2, "v"))
 }

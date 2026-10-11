@@ -1,9 +1,91 @@
 package runner
 
 import (
+	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestDefaultRunnerTimeout(t *testing.T) {
+	t.Setenv("AGENTUP_TEST_SLEEP", "1")
+	r := WithTimeout(&DefaultRunner{}, 50*time.Millisecond)
+	started := time.Now()
+	_, _, code, err := r.Run(os.Args[0], "-test.run=^TestRunnerHelperProcess$")
+	if !errors.Is(err, context.DeadlineExceeded) || code != -1 {
+		t.Fatalf("expected timeout, got code %d, %v", code, err)
+	}
+	if time.Since(started) > 3*time.Second {
+		t.Fatal("cancellation did not stop the child promptly")
+	}
+}
+
+func TestRunnerHelperProcess(t *testing.T) {
+	switch os.Getenv("AGENTUP_TEST_TREE") {
+	case "parent":
+		child := exec.Command(os.Args[0], "-test.run=^TestRunnerHelperProcess$")
+		child.Env = append(os.Environ(), "AGENTUP_TEST_TREE=child")
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Second)
+		return
+	case "child":
+		dir := os.Getenv("AGENTUP_TEST_TREE_DIR")
+		if err := os.WriteFile(filepath.Join(dir, "ready"), []byte("ready"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Second)
+		_ = os.WriteFile(filepath.Join(dir, "survived"), []byte("alive"), 0600)
+		time.Sleep(10 * time.Second)
+		return
+	}
+	if os.Getenv("AGENTUP_TEST_SLEEP") != "1" {
+		return
+	}
+	time.Sleep(10 * time.Second)
+}
+
+func TestDefaultRunnerCancellationKillsDescendants(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTUP_TEST_TREE", "parent")
+	t.Setenv("AGENTUP_TEST_TREE_DIR", dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, err := (&DefaultRunner{}).RunContext(ctx, os.Args[0], "-test.run=^TestRunnerHelperProcess$")
+		done <- err
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "ready")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("descendant did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected cancellation: %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("cancellation did not finish")
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(dir, "survived")); err == nil {
+		t.Fatal("descendant survived cancellation")
+	}
+}
 
 var errNotFound = errors.New("executable not found")
 

@@ -2,9 +2,9 @@ package upgrader
 
 import (
 	"fmt"
-	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"agentup/internal/config"
 	"agentup/internal/detector"
@@ -20,41 +20,58 @@ type Upgrader struct {
 	platform platform.Platform
 	detector *detector.Detector
 	tools    []config.ToolConfig
-	output   io.Writer // progress messages are written here
-	outputMu sync.Mutex
+	observer func(model.UpgradeEvent)
+	locksMu  sync.Mutex
+	locks    map[string]*sync.Mutex
 }
 
 const maxConcurrentUpgrades = 4
 
-// New creates a new Upgrader with the given runner, platform, detector, tools,
-// and output writer for progress messages. If output is nil, progress
-// messages are discarded.
-func New(r runner.Runner, p platform.Platform, det *detector.Detector, tools []config.ToolConfig, output io.Writer) *Upgrader {
-	if output == nil {
-		output = io.Discard
-	}
+// New creates an upgrader without coupling business logic to terminal output.
+func New(r runner.Runner, p platform.Platform, det *detector.Detector, tools []config.ToolConfig) *Upgrader {
 	return &Upgrader{
-		runner:   r,
+		runner:   runner.WithTimeout(r, 10*time.Minute),
 		platform: p,
 		detector: det,
 		tools:    tools,
-		output:   output,
+		locks:    make(map[string]*sync.Mutex),
 	}
+}
+
+// SetObserver must be called before starting an upgrade.
+func (u *Upgrader) SetObserver(observer func(model.UpgradeEvent)) {
+	u.observer = observer
+}
+
+func (u *Upgrader) emit(event model.UpgradeEvent) {
+	if u.observer != nil {
+		u.observer(event)
+	}
+}
+
+func (u *Upgrader) managerLock(info model.ToolInfo) *sync.Mutex {
+	key := string(info.InstallMethod)
+	if info.InstallMethod == model.InstallMethodSelfUpdate {
+		key += ":" + info.Path
+	}
+	u.locksMu.Lock()
+	defer u.locksMu.Unlock()
+	if u.locks[key] == nil {
+		u.locks[key] = &sync.Mutex{}
+	}
+	return u.locks[key]
 }
 
 // UpgradeAll upgrades all installed tools.
 // Tools that are not installed are skipped.
 // If one tool fails to upgrade, it does not affect the others.
-// Progress messages are written to the output writer.
+// Events describe progress while returned results preserve configured order.
 func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 	results := make([]model.UpgradeResult, len(u.tools))
 	total := len(u.tools)
 	if total == 0 {
 		return results
 	}
-	progress := newUpgradeProgress(u.output, &u.outputMu, total)
-	progress.begin()
-
 	type upgradeJob struct {
 		index int
 		tool  config.ToolConfig
@@ -69,7 +86,7 @@ func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				results[job.index] = u.upgradeToolWithProgress(job.tool, progress)
+				results[job.index] = u.upgradeToolWithProgress(job.tool)
 			}
 		}()
 	}
@@ -79,8 +96,6 @@ func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 	}
 	close(jobs)
 	wg.Wait()
-	progress.finish()
-
 	return results
 }
 
@@ -89,49 +104,40 @@ func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 func (u *Upgrader) Upgrade(name model.ToolName) (model.UpgradeResult, error) {
 	for _, tool := range u.tools {
 		if tool.Name == name {
-			progress := newUpgradeProgress(u.output, &u.outputMu, 1)
-			progress.begin()
-			result := u.upgradeToolWithProgress(tool, progress)
-			progress.finish()
-			return result, nil
+			return u.upgradeToolWithProgress(tool), nil
 		}
 	}
 	return model.UpgradeResult{}, fmt.Errorf("unsupported tool: %s", name)
 }
 
-// upgradeToolWithProgress wraps upgradeTool with progress output.
-func (u *Upgrader) upgradeToolWithProgress(tool config.ToolConfig, progress *upgradeProgress) model.UpgradeResult {
-	// Pre-detect to get info for progress message
+// upgradeToolWithProgress records duration and emits a completion even for skipped tasks.
+func (u *Upgrader) upgradeToolWithProgress(tool config.ToolConfig) (result model.UpgradeResult) {
+	started := time.Now()
+	defer func() {
+		result.DurationMillis = time.Since(started).Milliseconds()
+		u.emit(model.UpgradeEvent{Name: tool.Name, Phase: model.PhaseFinished, Result: &result})
+	}()
+	u.emit(model.UpgradeEvent{Name: tool.Name, Phase: model.PhaseDetecting})
 	info, err := u.detector.Detect(tool.Name)
 	if err != nil {
-		progress.announce("%s: detection failed", tool.Name)
-		result := model.UpgradeResult{
+		return model.UpgradeResult{
 			Name:    tool.Name,
-			Status:  model.UpgradeStatusSkipped,
+			Status:  model.UpgradeStatusFailed,
+			Outcome: model.OutcomeFailed,
 			Message: fmt.Sprintf("detection failed: %v", err),
 		}
-		progress.complete(result)
-		return result
 	}
 
 	if !info.Installed {
-		progress.announce("%s: not installed, skipping", tool.Name)
-		result := model.UpgradeResult{
+		return model.UpgradeResult{
 			Name:    tool.Name,
 			Status:  model.UpgradeStatusSkipped,
+			Outcome: model.OutcomeSkipped,
 			Message: "not installed",
 		}
-		progress.complete(result)
-		return result
 	}
 
-	// Print progress before upgrade starts
-	methodLabel := string(info.InstallMethod)
-	progress.announce("Upgrading %s (%s)...", tool.Name, methodLabel)
-
-	result := u.upgradeTool(tool, info)
-	progress.complete(result)
-	return result
+	return u.upgradeTool(tool, info)
 }
 
 // upgradeTool performs the upgrade for a single tool.
@@ -139,6 +145,7 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) mode
 	result := model.UpgradeResult{
 		Name:       tool.Name,
 		Status:     model.UpgradeStatusSkipped,
+		Outcome:    model.OutcomeSkipped,
 		OldVersion: "",
 		NewVersion: "",
 		Message:    "",
@@ -163,37 +170,52 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) mode
 	cmdName, cmdArgs, err := u.buildUpgradeCommand(tool, info.InstallMethod, info.Path)
 	if err != nil {
 		result.Status = model.UpgradeStatusFailed
+		result.Outcome = model.OutcomeFailed
 		result.Message = err.Error()
 		return result
 	}
 
-	_, stderr, exitCode, runErr := u.runner.Run(cmdName, cmdArgs...)
+	result.Command = append([]string{cmdName}, cmdArgs...)
+	u.emit(model.UpgradeEvent{Name: tool.Name, Phase: model.PhaseWaiting, Source: info.InstallMethod})
+	lock := u.managerLock(info)
+	lock.Lock()
+	defer lock.Unlock()
+	u.emit(model.UpgradeEvent{Name: tool.Name, Phase: model.PhaseUpgrading, Source: info.InstallMethod})
+	stdout, stderr, exitCode, runErr := u.runner.Run(cmdName, cmdArgs...)
+	result.Log = strings.TrimSpace(stdout + "\n" + stderr)
 	if runErr != nil {
 		result.Status = model.UpgradeStatusFailed
+		result.Outcome = model.OutcomeFailed
 		result.Message = classifyError(runErr, stderr, cmdName)
 		return result
 	}
 	if exitCode != 0 {
 		result.Status = model.UpgradeStatusFailed
+		result.Outcome = model.OutcomeFailed
 		result.Message = classifyExitError(stderr, exitCode, cmdName)
 		return result
 	}
 
 	// Step 4: Re-detect to get the new version
-	newInfo, _ := u.detector.Detect(tool.Name)
+	u.emit(model.UpgradeEvent{Name: tool.Name, Phase: model.PhaseVerifying, Source: info.InstallMethod})
+	newInfo, detectErr := u.detector.Detect(tool.Name)
 	result.NewVersion = newInfo.Version
 
 	// Step 5: Determine success
-	if result.NewVersion != result.OldVersion && result.NewVersion != "unknown" {
-		result.Status = model.UpgradeStatusSuccess
-	} else if result.NewVersion == "unknown" {
-		// Version couldn't be read after upgrade, but command succeeded
-		result.Status = model.UpgradeStatusSuccess
-		result.Message = "upgrade command succeeded, but could not verify new version"
+	result.Status = model.UpgradeStatusSuccess
+	if detectErr != nil || !newInfo.Installed || !knownVersion(result.NewVersion) || !knownVersion(result.OldVersion) {
+		result.Status = model.UpgradeStatusUnverified
+		result.Outcome = model.OutcomeUnverified
+		result.Message = "upgrade command succeeded, but the version change could not be verified"
+	} else if versionDecreased(result.OldVersion, result.NewVersion) {
+		result.Status = model.UpgradeStatusFailed
+		result.Outcome = model.OutcomeFailed
+		result.Message = "installed version decreased; check the package source and PATH"
+	} else if result.NewVersion != result.OldVersion {
+		result.Outcome = model.OutcomeUpdated
 	} else {
-		// Version didn't change — might already be latest
-		result.Status = model.UpgradeStatusSuccess
-		result.Message = "already up to date"
+		result.Outcome = model.OutcomeUnchanged
+		result.Message = "version unchanged; this does not confirm it is the latest"
 	}
 
 	return result

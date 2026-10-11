@@ -4,12 +4,13 @@
 
 ## 功能特性
 
-- **一键查看**：列出所有支持的 AI Coding Agent CLI 工具的安装状态、版本、安装方式和路径
+- **状态概览**：直接运行 `agentup`，以彩色紧凑列表查看版本、安装来源和更新状态；详细路径按需展开
 - **自动识别安装方式**：识别 npm、pnpm、yarn、Homebrew、winget、scoop 等安装方式
-- **并行升级**：自动使用对应的包管理器并行升级所有已安装的工具
+- **升级进度**：显示检测、等待、升级、验证阶段及耗时；同一包管理器串行升级，不同来源并行执行
 - **指定升级**：单独升级某个工具
 - **自身升级**：从 GitHub Releases 下载并校验最新版，直接升级 agentup
 - **环境诊断**：检查当前环境是否具备升级能力
+- **脚本友好**：提供离线检测、JSON 输出、颜色控制及可靠的失败退出码
 - **跨平台**：支持 macOS、Linux 和 Windows
 
 ## 支持的平台
@@ -78,19 +79,58 @@ go install agentup@latest
 ### 查看安装状态
 
 ```bash
+agentup
 agentup list
+agentup list --verbose
+agentup list --offline
 ```
 
-示例输出：
+不带子命令时显示只读状态概览，不会升级或安装任何工具。普通终端显示颜色：青色标题、绿色成功、黄色提醒、红色失败。默认隐藏完整路径，窄终端自动切换为逐项展示。
+
+先显示本机检测进度和已完成的结果，再查询各安装来源的最新版本。`--offline` 跳过最新版本查询，但仍读取本地版本和安装方式。
+
+示例输出（版本仅为演示）：
 
 ```text
-Name          Installed   Version   Install Method   Path                         Upgrade Supported
-----          ---------   -------   --------------   ----                         -----------------
-codex         yes         0.12.3    npm              /usr/local/bin/codex         yes
-claude-code   yes         1.0.21    npm              /usr/local/bin/claude        yes
-opencode      no          -         -                -                            -
-agy           yes         0.3.5     binary           /opt/homebrew/bin/agy        no
+AgentUp
+dev | Agent status
+
+Agent        Version           Source       Status
+-------------------------------------------------------------------
+codex        0.12.3 -> 0.13.0   npm          Update available
+claude-code  1.0.25             npm          Up to date
+opencode     -                  -            Not installed
+agy          0.3.5              self-update  Latest unavailable
+
+3 installed / 4 supported | 1 updates | 0 checks failed
+
+Next: agentup upgrade
 ```
+
+`Latest unavailable` 表示该安装来源没有可用的最新版查询，`Check failed` 表示查询执行失败，`Offline / not checked` 表示未查询。它们都不等同于“已是最新”。`--verbose` 展示完整路径、自动升级能力及查询失败原因。
+
+### 输出选项
+
+| 选项 | 行为 |
+|------|------|
+| `--color=auto` | 默认，仅在真实终端启用颜色 |
+| `--color=always` | 强制颜色，便于支持 ANSI 的展示工具使用 |
+| `--color=never` | 关闭颜色 |
+| `--verbose`, `-v` | 展开路径、检查详情和升级命令输出 |
+| `--offline` | 只读模式，跳过 registry 查询；不允许搭配升级命令 |
+| `--json` | 输出结构化 JSON，关闭进度和样式 |
+
+设置 `NO_COLOR` 环境变量（即使值为空）也会关闭颜色，包括 `--color=always`。重定向输出默认不带颜色或光标控制符；非交互模式的检测/升级事件写到 stderr，最终结果写到 stdout。
+
+```bash
+agentup list --offline --json
+agentup list --json > agents.json
+agentup upgrade codex --json > result.json
+agentup doctor --verbose
+agentup version --json
+```
+
+JSON 支持状态概览、`list`、`upgrade`、`update`、`doctor` 和 `version`，不支持 `uninstall`。列表结果包含 `latest_check`，升级结果包含 `outcome`、`duration_ms`、执行命令及日志。
 
 ### 一键升级所有已安装工具
 
@@ -98,36 +138,47 @@ agy           yes         0.3.5     binary           /opt/homebrew/bin/agy      
 agentup upgrade
 ```
 
-所有已安装工具会并行执行升级。任务编号按实际出现顺序从 1 递增，整体进度会在每个任务完成、跳过或失败时更新；最终汇总仍按工具列表顺序展示。
+交互式终端以固定任务行显示 `detecting`、`waiting`、`upgrading`、`verifying` 阶段及耗时，不刷出大量重复日志。同一包管理器的升级及后续验证排队执行，独立的包管理器或自升级工具可并行执行。一个工具失败不会阻止其他工具，最终汇总仍按配置顺序展示。
 
-示例输出：
+示例汇总：
 
 ```text
-Upgrading installed agents...
-Progress [------------------------]   0% (0/4 complete) | preparing
-[1/4] Upgrading agy (self-update)...
-[2/4] Upgrading codex (npm)...
-[3/4] opencode: not installed, skipping
-Progress [######------------------]  25% (1/4 complete) | opencode: skipped
-[4/4] Upgrading claude-code (npm)...
-Progress [############------------]  50% (2/4 complete) | agy: success
-Progress [##################------]  75% (3/4 complete) | codex: success
-Progress [########################] 100% (4/4 complete) | claude-code: success
+Upgrade results
 
-Summary:
-codex         success   0.12.3 -> 0.13.0
-claude-code   success   1.0.21 -> 1.0.25
-opencode      skipped   not installed
-agy           success   0.3.5 -> 0.3.6
+Agent        Version           Time  Result
+------------------------------------------------
+codex        0.12.3 -> 0.13.0   5s    updated
+claude-code  1.0.25             8s    unchanged
+opencode     -                  <1s   skipped
+agy          0.3.5 -> 0.3.6     3s    updated
 
-Done.
+2 updated | 1 unchanged | 0 unverified | 0 failed | 1 skipped
+
+claude-code: version unchanged; this does not confirm it is the latest
+
+opencode: not installed
 ```
+
+升级结果含义：
+
+| `outcome` | 含义 |
+|-----------|------|
+| `updated` | 命令成功，且检测到有效的新版本；版本降低会判为失败 |
+| `unchanged` | 命令成功，但版本未变；不能据此证明已是最新 |
+| `unverified` | 命令成功，但无法读取或比较升级前后的版本 |
+| `failed` | 升级命令或检测失败 |
+| `skipped` | 未安装或不支持自动升级 |
+
+失败或无法验证的结果附带重试命令。使用 `--verbose` 查看执行命令及捕获的 stdout/stderr。单次本地检测命令最多等待 15 秒，包管理器诊断命令最多等待 10 秒，单次升级命令最多等待 10 分钟；Ctrl+C 可取消正在执行的子进程。
+
+退出码 `0` 表示命令完成；`1` 表示参数错误、执行失败、最新版检查失败或升级结果无法验证。未安装、不支持查询、离线检查、版本未变和正常跳过不会单独导致失败。`doctor` 的诊断提醒以结果为准，缺少可选包管理器不会导致失败。
 
 ### 指定升级某一个工具
 
 ```bash
 agentup upgrade codex
 agentup upgrade claude-code
+agentup upgrade claude          # claude-code 的简写
 agentup upgrade opencode
 agentup upgrade agy
 ```
@@ -138,7 +189,7 @@ agentup upgrade agy
 agentup doctor
 ```
 
-检查当前操作系统的包管理器可用性和工具二进制是否在 PATH 中。
+优先显示操作系统、已安装 Agent 数量、可用包管理器和需要处理的问题。未安装的可选包管理器不视为错误。`agentup doctor --verbose` 展开包管理器版本和全部路径；诊断本身不查询最新版。
 
 ### 查看版本
 
@@ -239,7 +290,8 @@ agentup/
 │       └── selfupdate.go           # agentup Release 下载、校验和自身升级
 ├── pkg/
 │   └── table/
-│       └── table.go                # 表格输出格式化
+│       ├── table.go                # 统一终端样式与结果展示
+│       └── progress.go             # 实时检测与升级进度
 ├── install.ps1                     # Windows 一键安装脚本
 ├── install.sh                      # macOS/Linux 一键安装脚本
 ├── uninstall.ps1                   # Windows 卸载脚本
@@ -259,7 +311,7 @@ agentup/
 | `internal/platform` | 封装不同操作系统的差异 |
 | `internal/detector` | 检测工具是否安装、版本、路径、安装方式 |
 | `internal/upgrader` | 根据安装方式执行升级 |
-| `pkg/table` | 表格输出格式化 |
+| `pkg/table` | 统一终端样式、宽度适配、检测与升级进度 |
 
 ## 开发指南
 

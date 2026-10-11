@@ -17,11 +17,11 @@ type testPlatform struct {
 	hasScoop  bool
 }
 
-func (p *testPlatform) Name() string             { return p.name }
+func (p *testPlatform) Name() string                { return p.name }
 func (p *testPlatform) SupportedManagers() []string { return p.managers }
-func (p *testPlatform) IsBrewSupported() bool     { return p.hasBrew }
-func (p *testPlatform) IsWingetSupported() bool   { return p.hasWinget }
-func (p *testPlatform) IsScoopSupported() bool    { return p.hasScoop }
+func (p *testPlatform) IsBrewSupported() bool       { return p.hasBrew }
+func (p *testPlatform) IsWingetSupported() bool     { return p.hasWinget }
+func (p *testPlatform) IsScoopSupported() bool      { return p.hasScoop }
 
 // macTestPlatform returns a macOS-like test platform.
 func macTestPlatform() *testPlatform {
@@ -161,7 +161,7 @@ func TestDetect_VersionUnknownWhenCommandFails(t *testing.T) {
 	})
 	// npm available but package not in npm
 	mr.SetResult("npm", []string{"--version"}, runner.MockResult{
-		Stdout: "11.0.0\n",
+		Stdout:   "11.0.0\n",
 		ExitCode: 0,
 	})
 	mr.SetResult("npm", []string{"list", "-g", "@openai/codex", "--depth=0"}, runner.MockResult{
@@ -223,7 +223,7 @@ func TestDetect_FallbackToBinaryWhenNoManagerMatches(t *testing.T) {
 	})
 	// npm available but package not in npm
 	mr.SetResult("npm", []string{"--version"}, runner.MockResult{
-		Stdout: "11.0.0\n",
+		Stdout:   "11.0.0\n",
 		ExitCode: 0,
 	})
 	mr.SetResult("npm", []string{"list", "-g", "@openai/codex", "--depth=0"}, runner.MockResult{
@@ -303,7 +303,7 @@ func TestDetect_UnknownToolName(t *testing.T) {
 func TestCompareVersions(t *testing.T) {
 	tests := []struct {
 		v1, v2 string
-		want    int
+		want   int
 	}{
 		{"1.0.0", "1.0.0", 0},
 		{"1.0.0", "2.0.0", -1},
@@ -314,7 +314,7 @@ func TestCompareVersions(t *testing.T) {
 		{"1.2.3", "1.2.3", 0},
 		{"1.2.3", "1.2.4", -1},
 		{"1.2.10", "1.2.9", 1},
-		{"1.2.3-beta", "1.2.3", 0},   // pre-release stripped
+		{"1.2.3-beta", "1.2.3", -1},
 		{"1.2.3+build", "1.2.3", 0}, // build metadata stripped
 		{"", "", 0},
 		{"1.0", "1.0.0", 0},
