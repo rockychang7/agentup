@@ -116,6 +116,34 @@ func TestUpgrade_NotInstalledToolSkipped(t *testing.T) {
 	}
 }
 
+func TestUpgradeConfirmedRejectsChangedCommand(t *testing.T) {
+	for _, confirmed := range [][]string{
+		{"pnpm", "add", "-g", "@openai/codex"},
+		{"npm", "install", "-g", "@openai/codex@latest"},
+	} {
+		mr := runner.NewMockRunner()
+		setupNpmCodexInstalled(mr)
+		mr.SetResult("npm", []string{"install", "-g", "@openai/codex@latest"}, runner.MockResult{})
+		tools := config.DefaultTools()
+		p := macPlatform()
+		up := New(mr, p, detector.NewWithoutLatestCheck(mr, p, tools), tools)
+		result, err := up.UpgradeConfirmed(model.ToolCodex, confirmed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched := confirmed[0] == "npm"
+		executed := false
+		for _, call := range mr.Calls {
+			if len(call.Args) > 0 && call.Args[0] == "install" {
+				executed = true
+			}
+		}
+		if executed != matched || (!matched && result.Outcome != model.OutcomeFailed) {
+			t.Fatalf("confirmation mismatch guard: executed=%v result=%+v", executed, result)
+		}
+	}
+}
+
 func TestUpgrade_AgySelfUpdateSuccess(t *testing.T) {
 	mr := runner.NewMockRunner()
 

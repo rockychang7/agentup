@@ -13,6 +13,7 @@ import (
 	"agentup/internal/config"
 	"agentup/internal/detector"
 	"agentup/internal/model"
+	"agentup/internal/operation"
 	"agentup/internal/platform"
 	"agentup/internal/runner"
 	"agentup/internal/selfupdate"
@@ -21,6 +22,7 @@ import (
 
 func setupCommandTest(t *testing.T) (*cobra.Command, *bytes.Buffer, *bytes.Buffer, *runner.MockRunner) {
 	t.Helper()
+	isolateLocks(t)
 	oldFlags := outputFlags
 	oldRunner, oldPlatform, oldTools := appRunner, appPlatform, appTools
 	oldDetector, oldUpgrader := appDetector, appUpgrader
@@ -41,6 +43,47 @@ func setupCommandTest(t *testing.T) (*cobra.Command, *bytes.Buffer, *bytes.Buffe
 	cmd.SetOut(out)
 	cmd.SetErr(stderr)
 	return cmd, out, stderr, mr
+}
+
+func isolateLocks(t *testing.T) {
+	t.Helper()
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+}
+
+func TestMutationLockBlocksCLIUpgrade(t *testing.T) {
+	cmd, _, _, mr := setupCommandTest(t)
+	installMockCodex(mr)
+	release, err := operation.Acquire("mutation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := upgradeCmd.RunE(cmd, []string{"codex"}); err == nil {
+		t.Fatal("CLI upgrade bypassed mutation lock")
+	}
+	if len(mr.Calls) != 0 {
+		t.Fatal("busy upgrade executed commands")
+	}
+}
+
+func TestUIBlocksSelfUpdateAndUninstall(t *testing.T) {
+	cmd, _, _, mr := setupCommandTest(t)
+	release, err := operation.Acquire("ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := runSelfUpdate(cmd, false); err == nil || !strings.Contains(err.Error(), "close agentup ui") {
+		t.Fatal("self-update bypassed UI lock", err)
+	}
+	if err := uninstallCmd.RunE(cmd, nil); err == nil || !strings.Contains(err.Error(), "close agentup ui") {
+		t.Fatal("uninstall bypassed UI lock", err)
+	}
+	if len(mr.Calls) != 0 {
+		t.Fatal("blocked operation executed commands")
+	}
 }
 
 func installMockCodex(mr *runner.MockRunner) {

@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"agentup/internal/model"
+	"agentup/internal/operation"
 	"agentup/internal/selfupdate"
 	"agentup/pkg/table"
 )
@@ -34,6 +35,16 @@ architecture, then verified against the published SHA-256 checksums.`,
 }
 
 func runSelfUpdate(cmd *cobra.Command, force bool) error {
+	releaseUI, err := operation.Acquire("ui")
+	if err != nil {
+		return fmt.Errorf("close agentup ui before updating AgentUp: %w", err)
+	}
+	defer releaseUI()
+	release, err := operation.Acquire("mutation")
+	if err != nil {
+		return fmt.Errorf("cannot update AgentUp: %w", err)
+	}
+	defer release()
 	p := printer(cmd)
 	var progress *table.Progress
 	started := time.Now()

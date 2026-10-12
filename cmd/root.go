@@ -49,11 +49,11 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("invalid --color value %q; use auto, always or never", outputFlags.Color)
 		}
 		if outputFlags.Offline && cmd.Name() != "agentup" && cmd.Name() != "list" &&
-			cmd.Name() != "doctor" && cmd.Name() != "version" {
+			cmd.Name() != "doctor" && cmd.Name() != "version" && cmd.Name() != "ui" {
 			return fmt.Errorf("--offline is read-only; use agentup list --offline")
 		}
-		if outputFlags.JSON && cmd.Name() == "uninstall" {
-			return fmt.Errorf("--json is not supported by uninstall")
+		if outputFlags.JSON && (cmd.Name() == "uninstall" || cmd.Name() == "ui") {
+			return fmt.Errorf("--json is not supported by %s", cmd.Name())
 		}
 		initGlobals(commandContext(cmd))
 		return nil
@@ -132,4 +132,5 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(uninstallCmd)
+	rootCmd.AddCommand(uiCmd)
 }

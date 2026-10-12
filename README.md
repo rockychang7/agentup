@@ -1,10 +1,12 @@
 # AgentUp
 
-跨平台 CLI 工具，用于统一检测和升级本机安装的 AI Coding Agent CLI 工具。
+跨平台本地工具，用于统一检测和升级本机安装的 AI Coding Agent CLI 工具，提供命令行与本地 Web UI。
 
 ## 功能特性
 
 - **状态概览**：直接运行 `agentup`，以彩色紧凑列表查看版本、安装来源和更新状态；详细路径按需展开
+- **本地 Web UI**：`agentup ui` 打开 Agent 概览、升级任务和环境诊断；完整中英文切换，支持深色与浅色主题
+- **确认与实时日志**：Web UI 单项或批量升级前展示实际命令；执行中实时推送日志，刷新页面后恢复当前会话任务
 - **自动识别安装方式**：识别 npm、pnpm、yarn、Homebrew、winget、scoop 等安装方式
 - **升级进度**：显示检测、等待、升级、验证阶段及耗时；同一包管理器串行升级，不同来源并行执行
 - **指定升级**：单独升级某个工具
@@ -62,19 +64,40 @@ curl -fsSL https://raw.githubusercontent.com/rockychang7/agentup/main/install.sh
 
 ### 方式三：从源码编译
 
+需要 Go（版本见 `go.mod`）和 Node.js 22.12+；使用发布包运行时不需要 Node.js。
+
 ```bash
 git clone <repo-url>
 cd agentup
+npm ci --prefix web
+npm run build --prefix web
 go build -o agentup .
 ```
 
-### 方式四：go install（需要 Go 环境）
-
-```bash
-go install agentup@latest
-```
+Windows 使用 `go build -o agentup.exe .`。前端构建产物嵌入 Go 二进制，发布包不需要单独部署网页或安装前端依赖。仅运行 `go build` 仍可使用 CLI，但未生成前端资源时 `agentup ui` 会提示构建步骤。
 
 ## 使用方式
+
+### 本地 Web UI
+
+```bash
+agentup ui
+agentup ui --port 8765
+agentup ui --no-open
+agentup ui --offline
+```
+
+默认选择空闲端口并打开浏览器。`--port` 指定端口，`--no-open` 只输出启动地址；终端保持运行，Ctrl+C 停止服务。
+
+- **Agent 概览**：查看版本和安装来源，筛选有更新或已安装项，展开路径与升级命令，选择单项或批量升级
+- **升级任务**：先确认命令再执行；显示阶段、耗时、版本验证结果和实时输出，支持复制日志
+- **环境诊断**：检查包管理器、Agent 路径和自动升级能力，支持复制诊断报告
+- **中英文与主题**：界面语言、日期和业务状态随语言切换，记住语言与深浅主题；第三方命令的原始输出不翻译
+- **离线只读**：跳过最新版查询，允许本机检测和诊断；前后端均拒绝升级操作
+
+只监听 `127.0.0.1`，不支持远程访问。请使用终端显示的完整启动地址建立本地会话；启动凭证只在 URL fragment 中传递，不进入 HTTP 请求地址。API 校验会话、Host 和 Origin，升级接口不接受任意命令。打开页面只检测，不会自动升级或提权。
+
+任务记录保存在当前服务进程内，最多保留 20 条及每条任务最近的日志；刷新或重连不丢失，停止服务后不保留。CLI 与 Web UI 的升级互斥；AgentUp 自身更新或卸载前需关闭 Web UI。若确认后的检测结果或执行命令已变化，升级停止并要求重新确认。
 
 ### 查看安装状态
 
@@ -130,7 +153,7 @@ agentup doctor --verbose
 agentup version --json
 ```
 
-JSON 支持状态概览、`list`、`upgrade`、`update`、`doctor` 和 `version`，不支持 `uninstall`。列表结果包含 `latest_check`，升级结果包含 `outcome`、`duration_ms`、执行命令及日志。
+JSON 支持状态概览、`list`、`upgrade`、`update`、`doctor` 和 `version`，不支持 `uninstall` 和 `ui`。列表结果包含 `latest_check`，升级结果包含 `outcome`、`duration_ms`、执行命令及日志。
 
 ### 一键升级所有已安装工具
 
@@ -263,6 +286,7 @@ agentup/
 │   ├── upgrade.go                  # agentup upgrade [tool]
 │   ├── update.go                   # agentup 自升级
 │   ├── doctor.go                   # agentup doctor
+│   ├── ui.go                       # agentup ui 本地服务与浏览器启动
 │   ├── version.go                  # agentup version
 │   └── uninstall.go                # agentup uninstall
 ├── internal/
@@ -286,12 +310,17 @@ agentup/
 │   │   └── binary.go               # 手动 binary 安装检测 (fallback)
 │   ├── upgrader/
 │   │   └── upgrader.go             # 升级逻辑 + 命令构建 + 错误分类
+│   ├── diagnostic/                 # CLI / UI 共用环境诊断
+│   ├── operation/                  # 跨进程操作锁
+│   ├── service/                    # 检测状态、升级任务和有界日志
+│   ├── webui/                      # 本地 HTTP / SSE API 与嵌入资源
 │   └── selfupdate/
 │       └── selfupdate.go           # agentup Release 下载、校验和自身升级
 ├── pkg/
 │   └── table/
 │       ├── table.go                # 统一终端样式与结果展示
 │       └── progress.go             # 实时检测与升级进度
+├── web/                            # React / TypeScript 中英文 Web UI
 ├── install.ps1                     # Windows 一键安装脚本
 ├── install.sh                      # macOS/Linux 一键安装脚本
 ├── uninstall.ps1                   # Windows 卸载脚本
@@ -311,6 +340,11 @@ agentup/
 | `internal/platform` | 封装不同操作系统的差异 |
 | `internal/detector` | 检测工具是否安装、版本、路径、安装方式 |
 | `internal/upgrader` | 根据安装方式执行升级 |
+| `internal/diagnostic` | CLI 与 Web UI 共用的环境诊断 |
+| `internal/operation` | 防止多个进程同时修改安装 |
+| `internal/service` | 管理本地状态、任务与日志，推送状态变化 |
+| `internal/webui` | 受本地会话保护的 HTTP API、SSE 和嵌入页面 |
+| `web` | 中英文界面、主题与响应式布局 |
 | `pkg/table` | 统一终端样式、宽度适配、检测与升级进度 |
 
 ## 开发指南
@@ -326,8 +360,18 @@ agentup/
 ### 运行测试
 
 ```bash
+npm ci --prefix web
+npm run build --prefix web
 go test ./... -v
+go vet ./...
+
+# 浏览器测试使用模拟工具，不升级本机 Agent
+cd web
+npx playwright install chromium
+npm test
 ```
+
+Windows 浏览器测试默认使用已安装的 Microsoft Edge；Linux / macOS 需先安装 Playwright Chromium。CI 在三个操作系统运行 Go 测试，在 Linux 验证桌面和移动布局。修改页面后重新构建前端，再启动 `go run . ui` 验证嵌入资源。
 
 ### 跨平台编译
 
@@ -350,7 +394,8 @@ GOOS=linux GOARCH=arm64 go build -o agentup-linux-arm64 .
 
 ## 已知限制
 
-- **不支持桌面 GUI**：仅提供命令行界面
+- **不提供原生桌面安装器或托盘**：图形界面通过本地浏览器打开，不提供公网部署或远程管理
+- **任务历史不跨会话保留**：停止 `agentup ui` 后清空；不提供安装、卸载 Agent 或升级回滚
 - **不支持自动定时升级**：需要手动执行
 - **不管理 API Key**：不涉及账号登录和 API Key 管理
 - **不管理模型配置**：不涉及模型切换和代理配置

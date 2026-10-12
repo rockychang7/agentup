@@ -2,6 +2,7 @@ package upgrader
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,13 +17,14 @@ import (
 // Upgrader handles upgrading AI coding agent CLI tools
 // based on their detected installation method.
 type Upgrader struct {
-	runner   runner.Runner
-	platform platform.Platform
-	detector *detector.Detector
-	tools    []config.ToolConfig
-	observer func(model.UpgradeEvent)
-	locksMu  sync.Mutex
-	locks    map[string]*sync.Mutex
+	runner     runner.Runner
+	platform   platform.Platform
+	detector   *detector.Detector
+	tools      []config.ToolConfig
+	observer   func(model.UpgradeEvent)
+	streamLogs bool
+	locksMu    sync.Mutex
+	locks      map[string]*sync.Mutex
 }
 
 const maxConcurrentUpgrades = 4
@@ -41,6 +43,24 @@ func New(r runner.Runner, p platform.Platform, det *detector.Detector, tools []c
 // SetObserver must be called before starting an upgrade.
 func (u *Upgrader) SetObserver(observer func(model.UpgradeEvent)) {
 	u.observer = observer
+}
+
+func (u *Upgrader) SetStreamLogs(enabled bool) {
+	u.streamLogs = enabled
+}
+
+// Preview returns only commands generated from known tool configuration.
+func (u *Upgrader) Preview(info model.ToolInfo) ([]string, error) {
+	for _, tool := range u.tools {
+		if tool.Name == info.Name {
+			name, args, err := u.buildUpgradeCommand(tool, info.InstallMethod, info.Path)
+			if err != nil {
+				return nil, err
+			}
+			return append([]string{name}, args...), nil
+		}
+	}
+	return nil, fmt.Errorf("unsupported tool: %s", info.Name)
 }
 
 func (u *Upgrader) emit(event model.UpgradeEvent) {
@@ -86,7 +106,7 @@ func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				results[job.index] = u.upgradeToolWithProgress(job.tool)
+				results[job.index] = u.upgradeToolWithProgress(job.tool, nil)
 			}
 		}()
 	}
@@ -104,14 +124,27 @@ func (u *Upgrader) UpgradeAll() []model.UpgradeResult {
 func (u *Upgrader) Upgrade(name model.ToolName) (model.UpgradeResult, error) {
 	for _, tool := range u.tools {
 		if tool.Name == name {
-			return u.upgradeToolWithProgress(tool), nil
+			return u.upgradeToolWithProgress(tool, nil), nil
+		}
+	}
+	return model.UpgradeResult{}, fmt.Errorf("unsupported tool: %s", name)
+}
+
+// UpgradeConfirmed refuses to run a different command than the UI showed.
+func (u *Upgrader) UpgradeConfirmed(name model.ToolName, command []string) (model.UpgradeResult, error) {
+	if len(command) == 0 {
+		return model.UpgradeResult{}, fmt.Errorf("missing confirmed command")
+	}
+	for _, tool := range u.tools {
+		if tool.Name == name {
+			return u.upgradeToolWithProgress(tool, command), nil
 		}
 	}
 	return model.UpgradeResult{}, fmt.Errorf("unsupported tool: %s", name)
 }
 
 // upgradeToolWithProgress records duration and emits a completion even for skipped tasks.
-func (u *Upgrader) upgradeToolWithProgress(tool config.ToolConfig) (result model.UpgradeResult) {
+func (u *Upgrader) upgradeToolWithProgress(tool config.ToolConfig, confirmed []string) (result model.UpgradeResult) {
 	started := time.Now()
 	defer func() {
 		result.DurationMillis = time.Since(started).Milliseconds()
@@ -134,6 +167,16 @@ func (u *Upgrader) upgradeToolWithProgress(tool config.ToolConfig) (result model
 			Status:  model.UpgradeStatusSkipped,
 			Outcome: model.OutcomeSkipped,
 			Message: "not installed",
+		}
+	}
+
+	if confirmed != nil {
+		command, previewErr := u.Preview(info)
+		if previewErr != nil || !slices.Equal(command, confirmed) {
+			return model.UpgradeResult{
+				Name: tool.Name, Status: model.UpgradeStatusFailed, Outcome: model.OutcomeFailed,
+				OldVersion: info.Version, Message: "installation changed since confirmation; refresh and confirm the new upgrade command",
+			}
 		}
 	}
 
@@ -181,7 +224,18 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) mode
 	lock.Lock()
 	defer lock.Unlock()
 	u.emit(model.UpgradeEvent{Name: tool.Name, Phase: model.PhaseUpgrading, Source: info.InstallMethod})
-	stdout, stderr, exitCode, runErr := u.runner.Run(cmdName, cmdArgs...)
+	var stdout, stderr string
+	var exitCode int
+	var runErr error
+	if streaming, ok := u.runner.(interface {
+		RunStreaming(string, []string, func(string, string)) (string, string, int, error)
+	}); ok && u.streamLogs {
+		stdout, stderr, exitCode, runErr = streaming.RunStreaming(cmdName, cmdArgs, func(stream, text string) {
+			u.emit(model.UpgradeEvent{Name: tool.Name, Phase: model.PhaseUpgrading, Source: info.InstallMethod, Log: text, Stream: stream})
+		})
+	} else {
+		stdout, stderr, exitCode, runErr = u.runner.Run(cmdName, cmdArgs...)
+	}
 	result.Log = strings.TrimSpace(stdout + "\n" + stderr)
 	if runErr != nil {
 		result.Status = model.UpgradeStatusFailed

@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"agentup/internal/model"
+	"agentup/internal/operation"
 	"agentup/pkg/table"
 )
 
@@ -42,6 +43,11 @@ Examples:
 			}
 			target = model.ToolName(toolName)
 		}
+		release, err := operation.Acquire("mutation")
+		if err != nil {
+			return fmt.Errorf("cannot start upgrade: %w", err)
+		}
+		defer release()
 		names := []model.ToolName{target}
 		if target == "" {
 			names = make([]model.ToolName, len(appTools))

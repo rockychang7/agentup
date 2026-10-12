@@ -8,6 +8,8 @@ import (
 	"runtime"
 
 	"github.com/spf13/cobra"
+
+	"agentup/internal/operation"
 )
 
 // uninstallCmd removes agentup from the system.
@@ -22,8 +24,19 @@ This command:
 
 Example:
   agentup uninstall`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		releaseUI, err := operation.Acquire("ui")
+		if err != nil {
+			return fmt.Errorf("close agentup ui before uninstalling: %w", err)
+		}
+		defer releaseUI()
+		release, err := operation.Acquire("mutation")
+		if err != nil {
+			return err
+		}
+		defer release()
 		runUninstall()
+		return nil
 	},
 }
 

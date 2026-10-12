@@ -37,6 +37,19 @@ func (r *DefaultRunner) Run(name string, args ...string) (stdout, stderr string,
 }
 
 func (r *DefaultRunner) RunContext(ctx context.Context, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
+	return r.runContext(ctx, name, args, nil)
+}
+
+// RunStreaming reports output while retaining the usual command result.
+func (r *DefaultRunner) RunStreaming(name string, args []string, output func(string, string)) (string, string, int, error) {
+	ctx := r.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return r.runContext(ctx, name, args, output)
+}
+
+func (r *DefaultRunner) runContext(ctx context.Context, name string, args []string, output func(string, string)) (stdout, stderr string, exitCode int, err error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	configureCancellation(cmd)
 	// Prevent a child that inherits the pipes from blocking cancellation indefinitely.
@@ -44,6 +57,13 @@ func (r *DefaultRunner) RunContext(ctx context.Context, name string, args ...str
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
+	if output != nil {
+		out := newStreamWriter(&stdoutBuf, "stdout", output)
+		errOut := newStreamWriter(&stderrBuf, "stderr", output)
+		cmd.Stdout, cmd.Stderr = out, errOut
+		defer out.flush()
+		defer errOut.flush()
+	}
 
 	if runErr := cmd.Run(); runErr != nil {
 		if ctx.Err() != nil {
@@ -58,6 +78,26 @@ func (r *DefaultRunner) RunContext(ctx context.Context, name string, args ...str
 	}
 
 	return stdoutBuf.String(), stderrBuf.String(), 0, nil
+}
+
+func (r *timedRunner) RunStreaming(name string, args []string, output func(string, string)) (string, string, int, error) {
+	if base, ok := r.Runner.(*DefaultRunner); ok {
+		ctx := base.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+		return base.runContext(ctx, name, args, output)
+	}
+	stdout, stderr, code, err := r.Run(name, args...)
+	if stdout != "" {
+		output("stdout", stdout)
+	}
+	if stderr != "" {
+		output("stderr", stderr)
+	}
+	return stdout, stderr, code, err
 }
 
 type timedRunner struct {

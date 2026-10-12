@@ -118,6 +118,8 @@ type UpgradeEvent struct {
 	Phase  UpgradePhase
 	Source InstallMethod
 	Result *UpgradeResult
+	Log    string
+	Stream string
 }
 
 // ManagerInfo holds information about a package manager on the system.
@@ -131,10 +133,11 @@ type ManagerInfo struct {
 
 // ToolPathInfo holds path information for a tool binary.
 type ToolPathInfo struct {
-	Name  ToolName `json:"name"`
-	Found bool     `json:"found"`
-	Path  string   `json:"path"`
-	Issue string   `json:"issue,omitempty"`
+	Name      ToolName `json:"name"`
+	Found     bool     `json:"found"`
+	Path      string   `json:"path"`
+	Issue     string   `json:"issue,omitempty"`
+	IssueCode string   `json:"issue_code,omitempty"`
 }
 
 // DoctorResult holds the complete environment diagnosis result.

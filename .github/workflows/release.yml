@@ -22,6 +22,21 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build embedded Web UI
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+
+      - name: Test
+        run: go test ./...
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

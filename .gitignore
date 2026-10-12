@@ -8,6 +8,11 @@ agentup.exe
 
 # Build output
 /dist/
+/web/node_modules/
+/web/test-results/
+/web/playwright-report/
+/internal/webui/assets/*
+!/internal/webui/assets/README.txt
 
 # Test binary
 *.test

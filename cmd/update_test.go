@@ -26,6 +26,7 @@ func (u *fakeSelfUpdater) Update(_ context.Context, force bool) (selfupdate.Resu
 }
 
 func TestRunSelfUpdateSuccess(t *testing.T) {
+	isolateLocks(t)
 	originalUpdater := appSelfUpdater
 	originalVersion := Version
 	t.Cleanup(func() {
@@ -59,6 +60,7 @@ func TestRunSelfUpdateSuccess(t *testing.T) {
 }
 
 func TestUpgradeCommandRoutesAgentupToSelfUpdater(t *testing.T) {
+	isolateLocks(t)
 	originalUpdater := appSelfUpdater
 	originalVersion := Version
 	t.Cleanup(func() {
@@ -95,6 +97,7 @@ func TestUpgradeCommandRoutesAgentupToSelfUpdater(t *testing.T) {
 }
 
 func TestRunSelfUpdateAlreadyCurrent(t *testing.T) {
+	isolateLocks(t)
 	originalUpdater := appSelfUpdater
 	t.Cleanup(func() {
 		appSelfUpdater = originalUpdater
@@ -121,6 +124,7 @@ func TestRunSelfUpdateAlreadyCurrent(t *testing.T) {
 }
 
 func TestRunSelfUpdateError(t *testing.T) {
+	isolateLocks(t)
 	originalUpdater := appSelfUpdater
 	t.Cleanup(func() {
 		appSelfUpdater = originalUpdater
