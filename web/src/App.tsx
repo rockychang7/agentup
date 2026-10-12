@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import {
   Activity, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCircle2, ChevronDown, ChevronUp,
   CircleAlert, Clock3, Copy, Globe2, ListChecks, LoaderCircle, Monitor, Moon, RefreshCw,
-  ShieldCheck, Sun, Terminal, Unplug, X,
+  Power, ShieldCheck, Sun, Terminal, Unplug, X,
 } from 'lucide-react'
 import { APIError, request, useSession } from './api'
 import { dictionaries, initialLanguage } from './i18n'
@@ -60,7 +60,7 @@ function CopyButton({ value, t, onError }: { value: string; t: Dictionary; onErr
 }
 
 export function App() {
-  const { state, connection, sessionError, reconnect } = useSession()
+  const { state, connection, sessionError, reconnect, markStopped } = useSession()
   const [language, setLanguage] = useState<Language>(initialLanguage)
   const [theme, setTheme] = useState(() => preference('theme') === 'light' ? 'light' : 'dark')
   const [page, setPage] = useState<Page>('agents')
@@ -68,6 +68,7 @@ export function App() {
   const [submitting, setSubmitting] = useState(false)
   const [selection, setSelection] = useState<ToolName[]>([])
   const [confirmation, setConfirmation] = useState<ToolName[] | null>(null)
+  const [stopConfirmation, setStopConfirmation] = useState(false)
   const t = dictionaries[language]
   const busy = !state || state.scanning || state.diagnosing || !!state.active_task || submitting || connection !== 'connected'
   useEffect(() => {
@@ -111,18 +112,19 @@ export function App() {
       <header className="topbar">
         <div className="environment"><Monitor size={15} /><span>{state?.os || t.environment}<span className="divider">/</span><span className="mono">{state?.arch || '—'}</span></span></div>
         <div className="topbar-actions">
-          <span className={`connection ${connection === 'connected' ? 'good' : 'warning'}`} role="status"><span className="status-dot" /><span>{t[connection]}</span></span>
+          <span className={`connection ${connection === 'connected' ? 'good' : connection === 'stopped' ? 'muted' : 'warning'}`} role="status"><span className="status-dot" /><span>{t[connection]}</span></span>
           <label className="language-select"><Globe2 size={16} /><select aria-label={t.language} value={language} onChange={e => setLanguage(e.target.value as Language)}><option value="zh">中文</option><option value="en">English</option></select></label>
           <IconButton label={`${t.theme} · ${theme === 'dark' ? t.light : t.dark}`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun /> : <Moon />}</IconButton>
+          <IconButton label={state?.active_task ? t.stopBlocked : t.stopService} disabled={connection !== 'connected' || !!state?.active_task || submitting} onClick={() => { setError(''); setStopConfirmation(true) }}><Power /></IconButton>
         </div>
       </header>
       <main>
-        {(error || sessionError || connection === 'reconnecting') && <div className="alert" role="alert">
+        {connection !== 'stopped' && (error || sessionError || connection === 'reconnecting') && <div className="alert" role="alert">
           <CircleAlert size={18} /><span>{errorText(error || sessionError || 'network_error')}</span>
           {connection !== 'connected' && <button type="button" className="text-button" onClick={reconnect}>{t.retry}</button>}
           {error && <IconButton label={t.dismiss} onClick={() => setError('')}><X /></IconButton>}
         </div>}
-        {!state ? <div className="empty-state">{connection === 'connecting' ? <LoaderCircle className="spin" size={30} /> : <Unplug size={32} />}<h1>{connection === 'connecting' ? t.connecting : t.secureSession}</h1>{connection !== 'connecting' && <p>{t.sessionHint}</p>}</div> : <>
+        {connection === 'stopped' ? <div className="empty-state" role="status"><Power size={32} /><h1>{t.stopped}</h1><p>{t.stoppedNote}</p></div> : !state ? <div className="empty-state">{connection === 'connecting' ? <LoaderCircle className="spin" size={30} /> : <Unplug size={32} />}<h1>{connection === 'connecting' ? t.connecting : t.secureSession}</h1>{connection !== 'connecting' && <p>{t.sessionHint}</p>}</div> : <>
           <div className="page-heading"><div><span className="eyebrow">{t.workspace} / {page === 'agents' ? '01' : page === 'tasks' ? '02' : '03'}</span><h1>{t[page]}</h1></div><div className="heading-actions">
             {page === 'agents' && <><label className="offline-toggle"><input type="checkbox" role="switch" checked={state.offline} disabled={busy} onChange={e => void act('refresh', { offline: e.target.checked })} /><span className="switch-track" /><span>{t.offline}</span></label><button className="button secondary" disabled={busy} onClick={() => void act('refresh', { offline: state.offline })}><RefreshCw className={state.scanning ? 'spin' : ''} size={16} /><span>{state.scanning ? t.scanning : t.refresh}</span></button></>}
             {page === 'doctor' && <button className="button primary" disabled={busy} onClick={() => void act('doctor', {})}><Activity className={state.diagnosing ? 'pulse' : ''} size={16} />{state.diagnosing ? t.diagnosing : t.diagnose}</button>}
@@ -134,7 +136,8 @@ export function App() {
         </>}
       </main>
     </div>
-    {confirmation && <Confirmation agents={confirmAgents} t={t} submitting={submitting} disabled={busy || !!state?.offline || confirmAgents.length !== confirmation.length} onCancel={() => setConfirmation(null)} onConfirm={() => void act('upgrades', { tools: confirmation, revision: state?.revision }, () => { setConfirmation(null); setSelection([]); setPage('tasks') })} />}
+    {connection !== 'stopped' && confirmation && <Confirmation agents={confirmAgents} t={t} submitting={submitting} disabled={busy || !!state?.offline || confirmAgents.length !== confirmation.length} onCancel={() => setConfirmation(null)} onConfirm={() => void act('upgrades', { tools: confirmation, revision: state?.revision }, () => { setConfirmation(null); setSelection([]); setPage('tasks') })} />}
+    {connection !== 'stopped' && stopConfirmation && <StopConfirmation t={t} submitting={submitting} disabled={!!state?.active_task || connection !== 'connected' || submitting} onCancel={() => setStopConfirmation(false)} onConfirm={() => void act('shutdown', {}, () => { setStopConfirmation(false); markStopped() })} />}
   </div>
 }
 
@@ -205,6 +208,18 @@ function Confirmation({ agents, t, submitting, disabled, onCancel, onConfirm }: 
     <div className="command-list">{agents.map(agent => <div key={agent.name}><strong>{toolLabels[agent.name]}</strong><span className="mono">{displayVersion(agent.version, t)} {agent.latest_version && <>→ {agent.latest_version}</>}</span><code>{formatCommand(agent.command)}</code></div>)}</div>
     <p className="modal-note"><ShieldCheck size={16} />{t.confirmNote}</p>
     <div className="modal-actions"><button type="button" className="button secondary" disabled={submitting} onClick={onCancel}>{t.cancel}</button><button type="button" className="button primary" disabled={disabled} onClick={onConfirm}>{submitting ? <LoaderCircle size={16} className="spin" /> : <ArrowUp size={16} />}{submitting ? t.submitting : t.confirm}</button></div>
+  </dialog>
+}
+
+function StopConfirmation({ t, submitting, disabled, onCancel, onConfirm }: {
+  t: Dictionary; submitting: boolean; disabled: boolean; onCancel: () => void; onConfirm: () => void
+}) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => { dialog.current?.showModal() }, [])
+  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="stop-title" onCancel={e => { if (submitting) e.preventDefault(); else onCancel() }}>
+    <div className="modal-heading"><span className="modal-icon"><Power size={21} /></span><h2 id="stop-title">{t.stopService}</h2><IconButton label={t.close} disabled={submitting} onClick={onCancel}><X /></IconButton></div>
+    <p>{t.stopText}</p>
+    <div className="modal-actions"><button type="button" className="button secondary" disabled={submitting} onClick={onCancel}>{t.cancel}</button><button type="button" className="button danger" disabled={disabled} onClick={onConfirm}>{submitting ? <LoaderCircle size={16} className="spin" /> : <Power size={16} />}{submitting ? t.submitting : t.confirmStop}</button></div>
   </dialog>
 }
 

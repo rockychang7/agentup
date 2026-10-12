@@ -133,3 +133,51 @@ test('language and theme survive a local server port change', async ({ page }, i
   await expect(page.getByRole('combobox')).toHaveValue('zh')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
 })
+
+test('service shutdown requires confirmation and keeps other instances connected', async ({ page, context }, info) => {
+  const token = `${info.project.name}-shutdown`
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await launch(page, token)
+  const sameInstance = await context.newPage()
+  await launch(sameInstance, token)
+  const otherInstance = await context.newPage()
+  await otherInstance.goto(`http://127.0.0.1:42732/#token=${info.project.name}-other-instance`)
+  await otherInstance.getByRole('combobox').selectOption('en')
+  await expect(otherInstance.getByRole('switch')).toBeEnabled()
+  let shutdownRequests = 0
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/shutdown') shutdownRequests++
+  })
+  await page.getByRole('button', { name: 'Stop this service', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('Other instances are unaffected')
+  await noOverflow(page)
+  await page.screenshot({ path: info.outputPath('shutdown-confirmation.png'), fullPage: true })
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(shutdownRequests).toBe(0)
+  await expect(page.getByRole('switch')).toBeEnabled()
+  await page.getByRole('button', { name: 'Stop this service', exact: true }).click()
+  await page.getByRole('button', { name: 'Confirm stop', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Service stopped' })).toBeVisible()
+  await expect(sameInstance.getByRole('heading', { name: 'Service stopped' })).toBeVisible()
+  await expect(otherInstance.getByRole('switch')).toBeEnabled()
+  expect(shutdownRequests).toBe(1)
+  await expect(page.getByRole('button', { name: 'Reconnect', exact: true })).toHaveCount(0)
+  await page.getByRole('combobox').selectOption('zh')
+  await expect(page.getByRole('heading', { name: '服务已停止' })).toBeVisible()
+  await expect(page.getByText('当前本地会话已结束，其他 UI 实例不受影响。')).toBeVisible()
+  await page.screenshot({ path: info.outputPath('service-stopped-zh.png'), fullPage: true })
+  await noOverflow(page)
+  expect(errors).toEqual([])
+})
+
+test('shutdown controls protect an active upgrade', async ({ page }, info) => {
+  await launch(page, `${info.project.name}-shutdown-upgrade`)
+  await page.getByRole('button', { name: 'Upgrade Codex', exact: true }).click()
+  await page.getByRole('button', { name: 'Confirm and upgrade', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'An upgrade is running. Stop the service after it finishes.' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Stop this service', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Stop this service', exact: true }).click()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})

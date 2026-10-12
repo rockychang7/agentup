@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"agentup/internal/model"
@@ -23,12 +24,14 @@ import (
 var assets embed.FS
 
 type Server struct {
-	service *service.Service
-	origin  string
-	host    string
-	token   string
-	cookie  string
-	static  http.Handler
+	service  *service.Service
+	origin   string
+	host     string
+	token    string
+	cookie   string
+	static   http.Handler
+	stopped  chan struct{}
+	stopOnce sync.Once
 }
 
 func New(s *service.Service, origin string) (*Server, error) {
@@ -46,10 +49,20 @@ func newServer(s *service.Service, origin string, root fs.FS) (*Server, error) {
 	}
 	token := base64.RawURLEncoding.EncodeToString(random)
 	return &Server{service: s, origin: origin, host: strings.TrimPrefix(origin, "http://"), token: token,
-		cookie: "agentup_" + token[:12], static: http.FileServer(http.FS(root))}, nil
+		cookie: "agentup_" + token[:12], static: http.FileServer(http.FS(root)), stopped: make(chan struct{})}, nil
 }
 
 func (s *Server) URL() string { return s.origin + "/#token=" + s.token }
+
+func (s *Server) Done() <-chan struct{} { return s.stopped }
+
+func (s *Server) Stop(force bool) error {
+	if err := s.service.Stop(force); err != nil {
+		return err
+	}
+	s.stopOnce.Do(func() { close(s.stopped) })
+	return nil
+}
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -112,6 +125,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write(s.service.JSON())
 	case r.URL.Path == "/api/events" && r.Method == http.MethodGet:
 		s.events(w, r)
+	case r.URL.Path == "/api/shutdown" && r.Method == http.MethodPost:
+		var input struct {
+			Force bool `json:"force"`
+		}
+		if !s.decode(w, r, &input) {
+			return
+		}
+		s.operation(w, s.Stop(input.Force))
 	case r.URL.Path == "/api/refresh" && r.Method == http.MethodPost:
 		var input struct {
 			Offline bool `json:"offline"`
@@ -227,6 +248,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	dirty := false
 	for {
 		select {
+		case <-s.stopped:
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_, _ = fmt.Fprint(w, "event: shutdown\ndata: {}\n\n")
+			flusher.Flush()
+			return
 		case <-r.Context().Done():
 			return
 		case <-changes:

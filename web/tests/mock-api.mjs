@@ -9,7 +9,7 @@ const sessions = new Map()
 const labels = ['codex', 'claude-code', 'opencode', 'agy']
 function newSession() {
   const state = {
-    version: '0.5.0-dev', os: 'Windows', arch: 'amd64', offline: false,
+    version: '0.5.1-dev', os: 'Windows', arch: 'amd64', offline: false,
     revision: 1, scanning: false, diagnosing: false, active_task: '', tasks: [], doctor: null,
     agents: labels.map((name, i) => ({
       name, installed: i !== 2, version: i === 0 ? '1.2.0' : i === 1 ? '2.1.0' : i === 3 ? '0.3.5' : '',
@@ -20,7 +20,7 @@ function newSession() {
       command: i === 2 ? [] : i === 3 ? ['C:\\tools\\agy.exe', 'update'] : ['npm', 'install', '-g', i === 0 ? '@openai/codex@latest' : '@anthropic-ai/claude-code@latest'],
     })),
   }
-  return { state, streams: new Set() }
+  return { state, streams: new Set(), stopped: false }
 }
 function broadcast(session) {
   session.state.revision++
@@ -33,6 +33,7 @@ function json(response, code, body) {
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.woff': 'font/woff', '.woff2': 'font/woff2' }
 const handle = async (req, res) => {
   try {
+    const cookieName = `fixture_${req.socket.localPort}`
     const url = new URL(req.url, 'http://127.0.0.1')
     if (!url.pathname.startsWith('/api/')) {
       const path = resolve(assets, url.pathname === '/' ? 'index.html' : `.${url.pathname}`)
@@ -50,18 +51,33 @@ const handle = async (req, res) => {
     if (url.pathname === '/api/session') {
       if (!body.token) return json(res, 401, { error: 'unauthorized' })
       if (!sessions.has(body.token)) sessions.set(body.token, newSession())
-      res.setHeader('Set-Cookie', `fixture=${encodeURIComponent(body.token)}; Path=/api/; HttpOnly; SameSite=Strict`)
+      res.setHeader('Set-Cookie', `${cookieName}=${encodeURIComponent(body.token)}; Path=/api/; HttpOnly; SameSite=Strict`)
       return json(res, 200, { ok: true })
     }
-    const key = decodeURIComponent((req.headers.cookie || '').match(/fixture=([^;]+)/)?.[1] || '')
+    const key = decodeURIComponent((req.headers.cookie || '').match(new RegExp(`${cookieName}=([^;]+)`))?.[1] || '')
     const session = sessions.get(key)
     if (!session) return json(res, 401, { error: 'unauthorized' })
     const { state } = session
+    if (url.pathname === '/api/shutdown') {
+      if (state.active_task && !body.force) return json(res, 409, { error: 'busy' })
+      session.stopped = true
+      json(res, 202, { ok: true })
+      for (const stream of session.streams) {
+        stream.end('event: shutdown\ndata: {}\n\n')
+      }
+      session.streams.clear()
+      return
+    }
     if (url.pathname === '/api/state') return json(res, 200, state)
     if (url.pathname === '/api/events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' })
       session.streams.add(res)
       res.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`)
+      if (session.stopped) {
+        res.end('event: shutdown\ndata: {}\n\n')
+        session.streams.delete(res)
+        return
+      }
       req.on('close', () => session.streams.delete(res))
       return
     }

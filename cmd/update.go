@@ -37,7 +37,7 @@ architecture, then verified against the published SHA-256 checksums.`,
 func runSelfUpdate(cmd *cobra.Command, force bool) error {
 	releaseUI, err := operation.Acquire("ui")
 	if err != nil {
-		return fmt.Errorf("close agentup ui before updating AgentUp: %w", err)
+		return fmt.Errorf("close agentup ui before updating AgentUp; run agentup ui stop --all (use Ctrl+C for older UIs): %w", err)
 	}
 	defer releaseUI()
 	release, err := operation.Acquire("mutation")

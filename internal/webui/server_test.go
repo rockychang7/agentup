@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"agentup/internal/config"
+	"agentup/internal/model"
 	"agentup/internal/platform"
 	"agentup/internal/runner"
 	"agentup/internal/service"
@@ -64,6 +65,9 @@ func TestSessionAndSecurityBoundaries(t *testing.T) {
 		{"GET", "/api/state", "", false, false, 401},
 		{"GET", "/api/state", "", true, false, 200},
 		{"POST", "/api/refresh", `{}`, true, false, 403},
+		{"POST", "/api/shutdown", `{}`, false, true, 401},
+		{"POST", "/api/shutdown", `{}`, true, false, 403},
+		{"GET", "/api/shutdown", "", true, true, 405},
 		{"POST", "/api/session", `{"token":"wrong"}`, false, false, 401},
 		{"GET", "/api/session", "", false, false, 405},
 		{"GET", "/server.go", "", false, false, 404},
@@ -184,5 +188,116 @@ func TestMissingAssetsReportsBuildInstructions(t *testing.T) {
 	_, err := newServer(s.service, s.origin, fstest.MapFS{})
 	if err == nil || !strings.Contains(err.Error(), "npm ci") {
 		t.Fatal("missing build should explain recovery")
+	}
+}
+
+func TestShutdownIsAuthenticatedStrictAndStopsOnlyThisService(t *testing.T) {
+	s := fixture(t)
+	other := fixture(t)
+	for _, body := range []string{`null`, `{"force":"yes"}`, `{"unknown":1}`, `{} {}`} {
+		if w := perform(s, "POST", "/api/shutdown", body, true, true); w.Code != 400 {
+			t.Fatal("invalid shutdown request accepted", body, w.Code)
+		}
+	}
+	if w := perform(s, "POST", "/api/shutdown", `{}`, true, true); w.Code != 202 {
+		t.Fatal("shutdown failed", w.Code, w.Body)
+	}
+	select {
+	case <-s.Done():
+	default:
+		t.Fatal("shutdown signal was not sent")
+	}
+	select {
+	case <-other.Done():
+		t.Fatal("shutdown affected another instance")
+	default:
+	}
+	if err := s.service.Refresh(false); err != service.ErrBusy {
+		t.Fatal("shutdown service accepted new work", err)
+	}
+	if w := perform(s, "POST", "/api/shutdown", `{}`, true, true); w.Code != 202 {
+		t.Fatal("repeated shutdown was not idempotent", w.Code)
+	}
+}
+
+func TestShutdownSSEStopsAutomaticReconnect(t *testing.T) {
+	s := fixture(t)
+	if err := s.Stop(false); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	req := httptest.NewRequest("GET", s.origin+"/api/events", nil).WithContext(ctx)
+	req.AddCookie(&http.Cookie{Name: s.cookie, Value: s.token})
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), "event: shutdown\ndata: {}\n\n") {
+		t.Fatal("SSE did not explain intentional shutdown", w.Body)
+	}
+}
+
+type shutdownRunner struct {
+	*runner.MockRunner
+	started chan struct{}
+	resume  chan struct{}
+}
+
+func (r *shutdownRunner) Run(name string, args ...string) (string, string, int, error) {
+	if name == "/mock/agy" && len(args) == 1 && args[0] == "update" {
+		close(r.started)
+		<-r.resume
+	}
+	return r.MockRunner.Run(name, args...)
+}
+
+func TestShutdownProtectsActiveUpgradeUnlessForced(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	mock := runner.NewMockRunner()
+	mock.SetLookPath("agy", "/mock/agy", nil)
+	mock.SetResult("/mock/agy", []string{"--version"}, runner.MockResult{Stdout: "1.0.0"})
+	mock.SetResult("/mock/agy", []string{"update"}, runner.MockResult{Stdout: "done"})
+	r := &shutdownRunner{MockRunner: mock, started: make(chan struct{}), resume: make(chan struct{})}
+	svc := service.New(context.Background(), "test", "test", r, platform.NewPlatform(), config.DefaultTools())
+	t.Cleanup(svc.Close)
+	t.Cleanup(func() { close(r.resume) })
+	s, err := newServer(svc, "http://127.0.0.1:43210", fstest.MapFS{"index.html": {Data: []byte("<html>AgentUp</html>")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Refresh(false); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for svc.Snapshot().Scanning && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := svc.Upgrade([]model.ToolName{model.ToolAgy}, svc.Snapshot().Revision); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("upgrade did not start")
+	}
+	if w := perform(s, "POST", "/api/shutdown", `{}`, true, true); w.Code != http.StatusConflict {
+		t.Fatal("normal shutdown interrupted an active upgrade", w.Code, w.Body)
+	}
+	select {
+	case <-s.Done():
+		t.Fatal("rejected shutdown still stopped the server")
+	default:
+	}
+	if w := perform(s, "POST", "/api/shutdown", `{"force":true}`, true, true); w.Code != http.StatusAccepted {
+		t.Fatal("forced shutdown failed", w.Code, w.Body)
+	}
+	select {
+	case <-s.Done():
+	default:
+		t.Fatal("forced shutdown did not stop the server")
+	}
+	if err := svc.Refresh(false); err != service.ErrBusy {
+		t.Fatal("forced shutdown accepted new work", err)
 	}
 }

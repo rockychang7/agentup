@@ -48,7 +48,8 @@ var rootCmd = &cobra.Command{
 		if outputFlags.Color != "auto" && outputFlags.Color != "always" && outputFlags.Color != "never" {
 			return fmt.Errorf("invalid --color value %q; use auto, always or never", outputFlags.Color)
 		}
-		if outputFlags.Offline && cmd.Name() != "agentup" && cmd.Name() != "list" &&
+		isUI := cmd.Name() == "ui" || (cmd.Parent() != nil && cmd.Parent().Name() == "ui")
+		if outputFlags.Offline && !isUI && cmd.Name() != "agentup" && cmd.Name() != "list" &&
 			cmd.Name() != "doctor" && cmd.Name() != "version" && cmd.Name() != "ui" {
 			return fmt.Errorf("--offline is read-only; use agentup list --offline")
 		}

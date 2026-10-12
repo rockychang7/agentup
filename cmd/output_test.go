@@ -70,7 +70,7 @@ func TestMutationLockBlocksCLIUpgrade(t *testing.T) {
 
 func TestUIBlocksSelfUpdateAndUninstall(t *testing.T) {
 	cmd, _, _, mr := setupCommandTest(t)
-	release, err := operation.Acquire("ui")
+	release, err := operation.AcquireShared("ui")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -247,3 +247,46 @@ func TestInstallationChangeStopsBeforeMutation(t *testing.T) {
 		}
 	}
 }
+
+func TestMultipleServicesSerializeUpgradesAndProtectActiveTaskOnStop(t *testing.T) {
+	s, mr := newTestService(t)
+	r := &blockingRunner{MockRunner: mr, args: "update", started: make(chan struct{}), resume: make(chan struct{})}
+	var once sync.Once
+	resume := func() { once.Do(func() { close(r.resume) }) }
+	t.Cleanup(resume)
+	s.r = r
+	other := New(context.Background(), "test", "test", mr, platform.NewPlatform(), config.DefaultTools())
+	t.Cleanup(other.Close)
+	for _, current := range []*Service{s, other} {
+		if err := current.Refresh(false); err != nil {
+			t.Fatal(err)
+		}
+		waitState(t, current, func(state State) bool { return !state.Scanning })
+	}
+	if _, err := s.Upgrade([]model.ToolName{model.ToolAgy}, s.Snapshot().Revision); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("upgrade did not start")
+	}
+	if _, err := other.Upgrade([]model.ToolName{model.ToolAgy}, other.Snapshot().Revision); err != ErrBusy {
+		t.Fatal("another instance bypassed the mutation lock", err)
+	}
+	if err := s.Stop(false); err != ErrBusy || s.ctx.Err() != nil {
+		t.Fatal("normal shutdown canceled an active upgrade", err)
+	}
+	if err := s.Stop(true); err != nil || s.ctx.Err() != context.Canceled {
+		t.Fatal("forced shutdown did not cancel the instance", err)
+	}
+	if other.ctx.Err() != nil {
+		t.Fatal("stopping one service canceled another")
+	}
+	resume()
+	s.Close()
+	if _, err := other.Upgrade([]model.ToolName{model.ToolAgy}, other.Snapshot().Revision); err != nil {
+		t.Fatal("stopped instance retained the mutation lock", err)
+	}
+	waitState(t, other, func(state State) bool { return !state.Scanning && state.ActiveTask == "" })
+}

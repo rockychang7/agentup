@@ -85,9 +85,17 @@ agentup ui
 agentup ui --port 8765
 agentup ui --no-open
 agentup ui --offline
+agentup ui status
+agentup ui stop
+agentup ui stop --port 8765
+agentup ui stop --all
 ```
 
-默认选择空闲端口并打开浏览器。`--port` 指定端口，`--no-open` 只输出启动地址；终端保持运行，Ctrl+C 停止服务。
+默认选择空闲端口并打开浏览器。每次启动都是独立实例，可在多个终端同时运行；`--port` 指定端口，重复占用同一端口会提示选择其他端口。`--no-open` 只输出启动地址；终端保持运行，Ctrl+C 停止该实例。
+
+`agentup ui status` 显示当前用户的运行实例、端口、PID、版本和完整启动地址；`--json` 输出不包含会话凭证。只有一个实例时，`agentup ui stop` 自动停止它；多个实例时需用 `--port` 指定或用 `--all` 全部停止。网页右上角的电源按钮在确认后停止当前实例，其他实例不受影响；同一实例的所有已连接页面会显示“服务已停止”并停止自动重连。关闭浏览器不会停止服务。
+
+停止命令默认拒绝中断正在执行的升级；检测和诊断可以取消。确实需要中断升级时，可执行 `agentup ui stop --port 8765 --force` 或 `agentup ui stop --all --force`。强制停止会取消子进程，但不回滚已发生的包管理器修改。命令等待实例清理完成后返回，随后可运行自身更新或卸载。
 
 - **Agent 概览**：查看版本和安装来源，筛选有更新或已安装项，展开路径与升级命令，选择单项或批量升级
 - **升级任务**：先确认命令再执行；显示阶段、耗时、版本验证结果和实时输出，支持复制日志
@@ -97,7 +105,9 @@ agentup ui --offline
 
 只监听 `127.0.0.1`，不支持远程访问。请使用终端显示的完整启动地址建立本地会话；启动凭证只在 URL fragment 中传递，不进入 HTTP 请求地址。API 校验会话、Host 和 Origin，升级接口不接受任意命令。打开页面只检测，不会自动升级或提权。
 
-任务记录保存在当前服务进程内，最多保留 20 条及每条任务最近的日志；刷新或重连不丢失，停止服务后不保留。CLI 与 Web UI 的升级互斥；AgentUp 自身更新或卸载前需关闭 Web UI。若确认后的检测结果或执行命令已变化，升级停止并要求重新确认。
+任务记录保存在各自服务进程内，最多保留 20 条及每条任务最近的日志；同一实例刷新或重连不丢失，停止服务后不保留，不同实例不共享任务历史。CLI 与所有 Web UI 实例的升级互斥；AgentUp 自身更新或卸载前需执行 `agentup ui stop --all` 关闭全部实例。若确认后的检测结果或执行命令已变化，升级停止并要求重新确认。
+
+运行实例通过当前用户缓存目录中的记录和操作系统锁登记；进程异常退出后，后续状态或停止命令会清理失效记录，不会仅按 PID 强杀进程。`v0.5.0` 的旧版 UI 没有实例登记与停止接口，首次切换时需在原终端 Ctrl+C 停止；新版管理命令只控制新版启动的实例。
 
 ### 查看安装状态
 
@@ -153,7 +163,7 @@ agentup doctor --verbose
 agentup version --json
 ```
 
-JSON 支持状态概览、`list`、`upgrade`、`update`、`doctor` 和 `version`，不支持 `uninstall` 和 `ui`。列表结果包含 `latest_check`，升级结果包含 `outcome`、`duration_ms`、执行命令及日志。
+JSON 支持状态概览、`list`、`upgrade`、`update`、`doctor`、`version`、`ui status` 和 `ui stop`，不支持 `uninstall` 和启动 `ui`。列表结果包含 `latest_check`，升级结果包含 `outcome`、`duration_ms`、执行命令及日志。`ui stop --json` 包含成功停止的端口和各失败实例的错误，部分停止失败时退出码仍为 `1`。
 
 ### 一键升级所有已安装工具
 
@@ -313,6 +323,7 @@ agentup/
 │   ├── diagnostic/                 # CLI / UI 共用环境诊断
 │   ├── operation/                  # 跨进程操作锁
 │   ├── service/                    # 检测状态、升级任务和有界日志
+│   ├── uisession/                  # UI 实例登记、存活检查和认证停止
 │   ├── webui/                      # 本地 HTTP / SSE API 与嵌入资源
 │   └── selfupdate/
 │       └── selfupdate.go           # agentup Release 下载、校验和自身升级
@@ -343,6 +354,7 @@ agentup/
 | `internal/diagnostic` | CLI 与 Web UI 共用的环境诊断 |
 | `internal/operation` | 防止多个进程同时修改安装 |
 | `internal/service` | 管理本地状态、任务与日志，推送状态变化 |
+| `internal/uisession` | 登记多实例、清理失效记录，通过认证请求停止服务 |
 | `internal/webui` | 受本地会话保护的 HTTP API、SSE 和嵌入页面 |
 | `web` | 中英文界面、主题与响应式布局 |
 | `pkg/table` | 统一终端样式、宽度适配、检测与升级进度 |

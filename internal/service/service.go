@@ -98,10 +98,19 @@ func New(ctx context.Context, version, arch string, r runner.Runner, p platform.
 }
 
 func (s *Service) Close() {
-	s.mu.Lock()
-	s.cancel()
-	s.mu.Unlock()
+	_ = s.Stop(true)
 	s.wg.Wait()
+}
+
+// Stop atomically rejects new work before cancellation without waiting on HTTP handlers.
+func (s *Service) Stop(force bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.ActiveTask != "" && !force {
+		return ErrBusy
+	}
+	s.cancel()
+	return nil
 }
 
 func (s *Service) JSON() []byte {

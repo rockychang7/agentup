@@ -3,10 +3,18 @@
 package operation
 
 import (
-	"golang.org/x/sys/unix"
+	"errors"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
-func lock(file *os.File) error {
-	return unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+func lock(file *os.File, shared bool) error {
+	mode := unix.LOCK_EX
+	if shared {
+		mode = unix.LOCK_SH
+	}
+	return unix.Flock(int(file.Fd()), mode|unix.LOCK_NB)
 }
+
+func isBusy(err error) bool { return errors.Is(err, unix.EWOULDBLOCK) }

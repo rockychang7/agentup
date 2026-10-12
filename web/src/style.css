@@ -83,6 +83,8 @@ main { padding: 36px 38px 20px; max-width: 1320px; margin: 0 auto; min-height: c
 .button.primary:hover:not(:disabled) { filter: brightness(1.1); }
 .button.secondary { background: var(--surface); border-color: var(--line); color: var(--text); }
 .button.secondary:hover:not(:disabled) { background: var(--raised); }
+.button.danger { background: var(--red); color: var(--bg); }
+.button.danger:hover:not(:disabled) { filter: brightness(1.1); }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 4px; color: var(--secondary); background: transparent; flex-shrink: 0; }
 .icon-button svg { width: 16px; height: 16px; }
 .icon-button:hover:not(:disabled) { background: var(--raised); color: var(--accent); }
