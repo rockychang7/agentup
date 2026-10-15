@@ -18,12 +18,21 @@ installation status, current version, install method, executable path,
 and whether automatic upgrade is supported.
 
 Example:
-  agentup list`,
+  agentup list
+  agentup list --kind desktop
+  agentup list --kind all --offline`,
 	Args: cobra.NoArgs,
 	RunE: runList,
 }
 
 func runList(cmd *cobra.Command, args []string) error {
+	kind, err := selectedKind(cmd)
+	if err != nil {
+		return err
+	}
+	if kind != "cli" {
+		return runDesktopList(cmd, kind)
+	}
 	p := printer(cmd)
 	names := make([]model.ToolName, len(appTools))
 	for i, tool := range appTools {

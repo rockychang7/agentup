@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -37,11 +38,25 @@ architecture, then verified against the published SHA-256 checksums.`,
 func runSelfUpdate(cmd *cobra.Command, force bool) error {
 	releaseUI, err := operation.Acquire("ui")
 	if err != nil {
-		return fmt.Errorf("close agentup ui before updating AgentUp; run agentup ui stop --all (use Ctrl+C for older UIs): %w", err)
+		if errors.Is(err, operation.ErrBusy) {
+			return actionableError{
+				message: "Close AgentUp UI before updating.",
+				hint:    "Run:\n  agentup ui stop --all\n  agentup update\n\nFor older UIs, press Ctrl+C in the UI terminal.",
+				cause:   err,
+			}
+		}
+		return fmt.Errorf("cannot update AgentUp: %w", err)
 	}
 	defer releaseUI()
 	release, err := operation.Acquire("mutation")
 	if err != nil {
+		if errors.Is(err, operation.ErrBusy) {
+			return actionableError{
+				message: "Another AgentUp operation is running.",
+				hint:    "Wait for it to finish, then retry:\n  agentup update",
+				cause:   err,
+			}
+		}
 		return fmt.Errorf("cannot update AgentUp: %w", err)
 	}
 	defer release()

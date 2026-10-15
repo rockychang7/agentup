@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -125,6 +126,27 @@ func (r *timedRunner) Run(name string, args ...string) (string, string, int, err
 	return r.Runner.Run(name, args...)
 }
 
+// RunInteractive hands the terminal to a command, for prompts such as sudo passwords.
+// Its output goes to stderr so machine-readable stdout stays intact.
+func (r *DefaultRunner) RunInteractive(name string, args []string) (int, error) {
+	ctx := r.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return -1, ctx.Err()
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode(), nil
+		}
+		return -1, fmt.Errorf("failed to execute '%s': %w", name, err)
+	}
+	return 0, nil
+}
+
 // LookPath searches for an executable in the system PATH.
 func (r *DefaultRunner) LookPath(file string) (string, error) {
 	return exec.LookPath(file)
@@ -186,6 +208,12 @@ func (m *MockRunner) Run(name string, args ...string) (stdout, stderr string, ex
 
 	// Default: command not found
 	return "", "", -1, fmt.Errorf("mock: no result set for '%s'", key)
+}
+
+// RunInteractive records the call and returns the preset exit code.
+func (m *MockRunner) RunInteractive(name string, args []string) (int, error) {
+	_, _, code, err := m.Run(name, args...)
+	return code, err
 }
 
 // LookPath returns a preset path result.

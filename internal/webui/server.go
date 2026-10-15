@@ -165,6 +165,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.reply(w, http.StatusAccepted, map[string]string{"id": id})
+	case r.URL.Path == "/api/desktop/upgrades" && r.Method == http.MethodPost:
+		var input struct {
+			Plans    []string `json:"plans"`
+			Revision *uint64  `json:"revision"`
+		}
+		if !s.decode(w, r, &input) {
+			return
+		}
+		if input.Revision == nil {
+			s.fail(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		id, err := s.service.UpgradeDesktops(input.Plans, *input.Revision)
+		if err != nil {
+			s.operation(w, err)
+			return
+		}
+		s.reply(w, http.StatusAccepted, map[string]string{"id": id})
 	default:
 		s.fail(w, http.StatusMethodNotAllowed, "method_not_allowed")
 	}

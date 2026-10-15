@@ -16,7 +16,7 @@ test('bilingual preferences, theme, details and responsive layout', async ({ pag
   page.on('pageerror', error => errors.push(error.message))
   await launch(page, `${info.project.name}-overview`)
   await expect(page).not.toHaveURL(/token=/)
-  await page.getByRole('button', { name: 'Show details Codex', exact: true }).click()
+  await page.getByRole('button', { name: 'Show details Codex CLI', exact: true }).click()
   await expect(page.getByText('npm install -g @openai/codex@latest', { exact: true })).toBeVisible()
   await noOverflow(page)
   await page.screenshot({ path: info.outputPath('agents-en.png'), fullPage: true })
@@ -33,10 +33,9 @@ test('bilingual preferences, theme, details and responsive layout', async ({ pag
 
 test('upgrades require confirmation and tasks survive reload', async ({ page }, info) => {
   await launch(page, `${info.project.name}-upgrade`)
-  await page.getByRole('button', { name: 'Select updates', exact: true }).click()
-  await expect(page.getByRole('checkbox', { name: 'Select Codex', exact: true })).toBeChecked()
-  await page.getByRole('button', { name: 'Upgrade selected', exact: true }).click()
+  await page.getByRole('button', { name: 'Upgrade all CLI updates (2)', exact: true }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('checkbox', { name: 'Codex CLI', exact: true })).toBeChecked()
   await expect(page.getByRole('dialog')).toContainText('npm install -g @openai/codex@latest')
   await page.screenshot({ path: info.outputPath('confirmation.png'), fullPage: true })
   await noOverflow(page)
@@ -44,8 +43,11 @@ test('upgrades require confirmation and tasks survive reload', async ({ page }, 
   await page.getByRole('button', { name: 'Upgrade tasks', exact: true }).click()
   await expect(page.getByText('No upgrade tasks yet')).toBeVisible()
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
-  await page.getByRole('button', { name: 'Upgrade selected', exact: true }).click()
+  await page.getByRole('button', { name: 'Upgrade all CLI updates (2)', exact: true }).click()
+  await page.getByRole('checkbox', { name: 'Claude Code CLI', exact: true }).uncheck()
+  const request = page.waitForRequest(req => new URL(req.url()).pathname === '/api/upgrades' && req.method() === 'POST')
   await page.getByRole('button', { name: 'Confirm and upgrade', exact: true }).click()
+  expect((await request).postDataJSON().tools).toEqual(['codex'])
   await expect(page.getByRole('heading', { name: 'Upgrade tasks' })).toBeVisible()
   await page.reload()
   await page.getByRole('button', { name: 'Upgrade tasks', exact: true }).click()
@@ -64,10 +66,10 @@ for (const scenario of [
   test(`OpenCode ${scenario.name} confirms and displays the matching upgrade command`, async ({ page }, info) => {
     await launch(page, `${info.project.name}-opencode-${scenario.name}`)
     const command = scenario.command.map(arg => /[\s"'`]/.test(arg) ? JSON.stringify(arg) : arg).join(' ')
-    await page.getByRole('button', { name: 'Show details OpenCode', exact: true }).click()
+    await page.getByRole('button', { name: 'Show details OpenCode CLI', exact: true }).click()
     await expect(page.getByText(command, { exact: true })).toBeVisible()
     await noOverflow(page)
-    await page.getByRole('button', { name: 'Upgrade OpenCode', exact: true }).click()
+    await page.getByRole('button', { name: 'Upgrade OpenCode CLI', exact: true }).click()
     await expect(page.getByRole('dialog')).toContainText(command)
     await page.screenshot({ path: info.outputPath('opencode-confirmation.png'), fullPage: true })
     await noOverflow(page)
@@ -85,7 +87,7 @@ test('offline mode disables mutations and diagnosis is bilingual', async ({ page
   await launch(page, `${info.project.name}-offline`)
   await page.getByRole('switch').click()
   await expect(page.getByRole('switch')).toBeChecked()
-  await expect(page.getByRole('button', { name: 'Upgrade Codex', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Upgrade Codex CLI', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click()
   await page.getByRole('button', { name: 'Run diagnostics', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Package managers', exact: true })).toBeVisible()
@@ -98,7 +100,7 @@ test('offline mode disables mutations and diagnosis is bilingual', async ({ page
 
 test('failure results and raw output remain distinct', async ({ page }, info) => {
   await launch(page, `${info.project.name}-failure`)
-  await page.getByRole('button', { name: 'Upgrade Codex', exact: true }).click()
+  await page.getByRole('button', { name: 'Upgrade Codex CLI', exact: true }).click()
   await page.getByRole('button', { name: 'Confirm and upgrade', exact: true }).click()
   await expect(page.locator('.log-output')).toContainText('EACCES')
   await expect(page.getByText('Upgrade did not complete. Check the raw output.')).toBeVisible()
@@ -119,7 +121,7 @@ test('narrow and intermediate layouts keep controls separated', async ({ page },
   for (const width of [320, 700, 981, 1200]) {
     await page.setViewportSize({ width, height: 900 })
     await noOverflow(page)
-    const boxes = await page.locator('.agent-entry').first().locator('.agent-name, .versions, .row-status, .row-actions').evaluateAll(nodes =>
+    const boxes = await page.locator('.lane-row').first().locator('.lane-name, .versions, .lane-status, .lane-action, .lane-toggle').evaluateAll(nodes =>
       nodes.map(node => {
         const { left, top, right, bottom } = node.getBoundingClientRect()
         return { left, top, right, bottom }
@@ -131,7 +133,7 @@ test('narrow and intermediate layouts keep controls separated', async ({ page },
           boxes[a].top < boxes[b].bottom && boxes[a].bottom > boxes[b].top).toBe(false)
       }
     }
-    await page.getByRole('button', { name: 'Upgrade Codex', exact: true }).click()
+    await page.getByRole('button', { name: 'Upgrade Codex CLI', exact: true }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
     await noOverflow(page)
     await page.keyboard.press('Escape')
@@ -142,8 +144,8 @@ test('narrow and intermediate layouts keep controls separated', async ({ page },
 test('clipboard controls copy the displayed command', async ({ page, context }, info) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   await launch(page, `${info.project.name}-copy`)
-  await page.getByRole('button', { name: 'Show details Codex', exact: true }).click()
-  await page.locator('.agent-details dd').filter({ hasText: 'npm install -g @openai/codex@latest' }).getByRole('button', { name: 'Copy', exact: true }).click()
+  await page.getByRole('button', { name: 'Show details Codex CLI', exact: true }).click()
+  await page.locator('.lane-details dd').filter({ hasText: 'npm install -g @openai/codex@latest' }).getByRole('button', { name: 'Copy', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Copied', exact: true })).toBeVisible()
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('npm install -g @openai/codex@latest')
 })
@@ -198,7 +200,7 @@ test('service shutdown requires confirmation and keeps other instances connected
 
 test('shutdown controls protect an active upgrade', async ({ page }, info) => {
   await launch(page, `${info.project.name}-shutdown-upgrade`)
-  await page.getByRole('button', { name: 'Upgrade Codex', exact: true }).click()
+  await page.getByRole('button', { name: 'Upgrade Codex CLI', exact: true }).click()
   await page.getByRole('button', { name: 'Confirm and upgrade', exact: true }).click()
   await expect(page.getByRole('button', { name: 'An upgrade is running. Stop the service after it finishes.' })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Stop this service', exact: true })).toBeEnabled()

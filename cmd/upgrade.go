@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -26,9 +27,23 @@ Examples:
   agentup upgrade              # Upgrade all installed tools
   agentup upgrade codex        # Upgrade only codex
   agentup upgrade claude-code  # Upgrade only claude-code
-  agentup upgrade agentup      # Upgrade agentup itself`,
+  agentup upgrade agentup      # Upgrade agentup itself
+  agentup upgrade codex --kind desktop       # Preview Desktop plan
+  agentup upgrade codex --kind desktop --yes # Confirm Desktop plan`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		kind, err := selectedKind(cmd)
+		if err != nil {
+			return err
+		}
+		if kind != "cli" {
+			return runDesktopUpgrade(cmd, args)
+		}
+		for _, flag := range []string{"yes", "instance"} {
+			if cmd.Flags().Changed(flag) {
+				return fmt.Errorf("--%s is only supported with --kind desktop", flag)
+			}
+		}
 		var target model.ToolName
 		if len(args) > 0 {
 			toolName := args[0]
@@ -45,6 +60,17 @@ Examples:
 		}
 		release, err := operation.Acquire("mutation")
 		if err != nil {
+			if errors.Is(err, operation.ErrBusy) {
+				retry := "agentup upgrade"
+				if target != "" {
+					retry += " " + string(target)
+				}
+				return actionableError{
+					message: "Another AgentUp operation is running.",
+					hint:    "Wait for it to finish, then retry:\n  " + retry,
+					cause:   err,
+				}
+			}
 			return fmt.Errorf("cannot start upgrade: %w", err)
 		}
 		defer release()

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,11 +28,25 @@ Example:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		releaseUI, err := operation.Acquire("ui")
 		if err != nil {
-			return fmt.Errorf("close agentup ui before uninstalling; run agentup ui stop --all (use Ctrl+C for older UIs): %w", err)
+			if errors.Is(err, operation.ErrBusy) {
+				return actionableError{
+					message: "Close AgentUp UI before uninstalling.",
+					hint:    "Run:\n  agentup ui stop --all\n  agentup uninstall\n\nFor older UIs, press Ctrl+C in the UI terminal.",
+					cause:   err,
+				}
+			}
+			return fmt.Errorf("cannot uninstall AgentUp: %w", err)
 		}
 		defer releaseUI()
 		release, err := operation.Acquire("mutation")
 		if err != nil {
+			if errors.Is(err, operation.ErrBusy) {
+				return actionableError{
+					message: "Another AgentUp operation is running.",
+					hint:    "Wait for it to finish, then retry:\n  agentup uninstall",
+					cause:   err,
+				}
+			}
 			return err
 		}
 		defer release()

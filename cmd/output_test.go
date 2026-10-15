@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,15 +56,43 @@ func isolateLocks(t *testing.T) {
 }
 
 func TestMutationLockBlocksCLIUpgrade(t *testing.T) {
-	cmd, _, _, mr := setupCommandTest(t)
+	cmd, out, stderr, mr := setupCommandTest(t)
 	installMockCodex(mr)
 	release, err := operation.Acquire("mutation")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
-	if err := upgradeCmd.RunE(cmd, []string{"codex"}); err == nil {
-		t.Fatal("CLI upgrade bypassed mutation lock")
+	for _, tt := range []struct {
+		name, retry string
+		run         func() error
+	}{
+		{"upgrade all", "agentup upgrade", func() error { return upgradeCmd.RunE(cmd, nil) }},
+		{"upgrade codex", "agentup upgrade codex", func() error { return upgradeCmd.RunE(cmd, []string{"codex"}) }},
+		{"upgrade claude", "agentup upgrade claude-code", func() error { return upgradeCmd.RunE(cmd, []string{"claude"}) }},
+		{"upgrade agentup", "agentup update", func() error { return upgradeCmd.RunE(cmd, []string{"agentup"}) }},
+		{"update", "agentup update", func() error { return runSelfUpdate(cmd, false) }},
+		{"uninstall", "agentup uninstall", func() error { return uninstallCmd.RunE(cmd, nil) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stderr.Reset()
+			err := tt.run()
+			if !errors.Is(err, operation.ErrBusy) || err.Error() != "Another AgentUp operation is running." {
+				t.Fatalf("busy operation must return a concise error and preserve ErrBusy: %v", err)
+			}
+			var actionable actionableError
+			if !errors.As(err, &actionable) || !strings.Contains(actionable.hint, "Wait for it to finish") {
+				t.Fatalf("busy operation must explain how to retry: %v", err)
+			}
+			printError(cmd, err)
+			want := "Error: Another AgentUp operation is running.\n\nWait for it to finish, then retry:\n  " + tt.retry + "\n"
+			if stderr.String() != want {
+				t.Fatalf("unexpected busy operation output:\ngot:  %q\nwant: %q", stderr.String(), want)
+			}
+		})
+	}
+	if out.Len() != 0 {
+		t.Fatalf("blocked operation wrote to stdout: %s", out.String())
 	}
 	if len(mr.Calls) != 0 {
 		t.Fatal("busy upgrade executed commands")
@@ -69,20 +100,133 @@ func TestMutationLockBlocksCLIUpgrade(t *testing.T) {
 }
 
 func TestUIBlocksSelfUpdateAndUninstall(t *testing.T) {
-	cmd, _, _, mr := setupCommandTest(t)
+	cmd, out, stderr, mr := setupCommandTest(t)
 	release, err := operation.AcquireShared("ui")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
-	if err := runSelfUpdate(cmd, false); err == nil || !strings.Contains(err.Error(), "close agentup ui") {
-		t.Fatal("self-update bypassed UI lock", err)
+	for _, tt := range []struct {
+		name, action, retry string
+		run                 func() error
+	}{
+		{"update", "updating", "agentup update", func() error { return runSelfUpdate(cmd, false) }},
+		{"upgrade agentup", "updating", "agentup update", func() error { return upgradeCmd.RunE(cmd, []string{"agentup"}) }},
+		{"uninstall", "uninstalling", "agentup uninstall", func() error { return uninstallCmd.RunE(cmd, nil) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stderr.Reset()
+			err := tt.run()
+			message := "Close AgentUp UI before " + tt.action + "."
+			if !errors.Is(err, operation.ErrBusy) || err.Error() != message {
+				t.Fatalf("UI lock must return a concise error and preserve ErrBusy: %v", err)
+			}
+			printError(cmd, err)
+			want := "Error: " + message + "\n\nRun:\n  agentup ui stop --all\n  " + tt.retry +
+				"\n\nFor older UIs, press Ctrl+C in the UI terminal.\n"
+			if stderr.String() != want {
+				t.Fatalf("unexpected UI conflict output:\ngot:  %q\nwant: %q", stderr.String(), want)
+			}
+		})
 	}
-	if err := uninstallCmd.RunE(cmd, nil); err == nil || !strings.Contains(err.Error(), "close agentup ui") {
-		t.Fatal("uninstall bypassed UI lock", err)
+	if out.Len() != 0 {
+		t.Fatalf("blocked operation wrote to stdout: %s", out.String())
 	}
 	if len(mr.Calls) != 0 {
 		t.Fatal("blocked operation executed commands")
+	}
+}
+
+func TestActionableErrorDetailsOnlyAppearInVerboseOutput(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		verbose bool
+		json    bool
+		width   int
+	}{
+		{name: "default"},
+		{name: "verbose", verbose: true},
+		{name: "json", json: true},
+		{name: "json verbose", json: true, verbose: true},
+		{name: "narrow", width: 40},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, out, stderr, _ := setupCommandTest(t)
+			outputFlags.Verbose, outputFlags.JSON, outputFlags.Width = tt.verbose, tt.json, tt.width
+			if tt.json {
+				outputFlags.Color = "always"
+			}
+			cause := fmt.Errorf("%w: system-lock-detail", operation.ErrBusy)
+			err := actionableError{
+				message: "Close AgentUp UI before updating.",
+				hint:    "Run:\n  agentup ui stop --all\n  agentup update",
+				cause:   cause,
+			}
+			printError(cmd, err)
+			text := stderr.String()
+			if strings.Contains(text, "system-lock-detail") != tt.verbose ||
+				strings.Contains(text, "Details:") != tt.verbose {
+				t.Fatalf("verbose=%t produced unexpected diagnostics: %q", tt.verbose, text)
+			}
+			if !strings.Contains(text, "\n  agentup ui stop --all\n  agentup update\n") {
+				t.Fatalf("recovery commands must stay on separate lines: %q", text)
+			}
+			if out.Len() != 0 || strings.Contains(text, "\x1b") {
+				t.Fatalf("error output must stay on stderr without ANSI: stdout=%q, stderr=%q", out.String(), text)
+			}
+			if tt.width > 0 {
+				for _, line := range strings.Split(text, "\n") {
+					if len(line) > tt.width {
+						t.Fatalf("error line exceeds width %d: %q", tt.width, line)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPrintErrorDoesNotDuplicateReportedErrors(t *testing.T) {
+	cmd, _, stderr, _ := setupCommandTest(t)
+	for _, err := range []error{
+		reportedError{"already printed"},
+		fmt.Errorf("wrapped: %w", reportedError{"already printed"}),
+	} {
+		printError(cmd, err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("reported errors were printed again: %q", stderr.String())
+	}
+	printError(cmd, errors.New("network unavailable"))
+	if stderr.String() != "Error: network unavailable\n" {
+		t.Fatalf("ordinary errors changed: %q", stderr.String())
+	}
+}
+
+func TestUILockFilesystemErrorsAreNotReportedAsBusy(t *testing.T) {
+	cmd, _, _, _ := setupCommandTest(t)
+	cacheFile := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(cacheFile, []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"LOCALAPPDATA", "XDG_CACHE_HOME", "HOME"} {
+		t.Setenv(name, cacheFile)
+	}
+	for _, tt := range []struct {
+		name string
+		run  func() error
+	}{
+		{"update", func() error { return runSelfUpdate(cmd, false) }},
+		{"uninstall", func() error { return uninstallCmd.RunE(cmd, nil) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			var pathError *os.PathError
+			var actionable actionableError
+			if err == nil || !errors.As(err, &pathError) || errors.As(err, &actionable) ||
+				errors.Is(err, operation.ErrBusy) {
+				t.Fatalf("filesystem error must retain its cause, not a UI-busy hint: %v", err)
+			}
+		})
 	}
 }
 

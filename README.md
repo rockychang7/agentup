@@ -1,11 +1,12 @@
 # AgentUp
 
-跨平台本地工具，用于统一检测和升级本机安装的 AI Coding Agent CLI 工具，提供命令行与本地 Web UI。
+跨平台本地工具，用于统一检测和升级本机安装的 AI Coding Agent CLI 与 Desktop 应用，提供命令行与本地 Web UI；默认命令仍只管理 CLI。
 
 ## 功能特性
 
 - **状态概览**：直接运行 `agentup`，以彩色紧凑列表查看版本、安装来源和更新状态；详细路径按需展开
 - **本地 Web UI**：`agentup ui` 打开 Agent 概览、升级任务和环境诊断；完整中英文切换，支持深色与浅色主题
+- **Desktop 分级管理**：三平台检测安装实例和最新版本、预览升级计划；按安装来源走 Homebrew Cask、WinGet、官方安装包（下载并校验签名）或 Linux 授权命令，其余给官方入口；Antigravity 仅管理 app，不管理 IDE
 - **确认与实时日志**：Web UI 单项或批量升级前展示实际命令；执行中实时推送日志，刷新页面后恢复当前会话任务
 - **自动识别安装方式**：识别 npm、pnpm、yarn、Homebrew、winget、scoop 等安装方式
 - **升级进度**：显示检测、等待、升级、验证阶段及耗时；同一包管理器串行升级，不同来源并行执行
@@ -38,6 +39,25 @@ OpenCode 仍作为一个工具管理，优先检测 PATH 中的 `opencode`，不
 v2 的 pnpm 升级带 `--allow-build=@opencode/cli`，允许官方必需的 postinstall 脚本。官方 `~/.opencode/bin/opencode`（Windows 为 `.exe`）安装支持 `opencode upgrade --method curl` 自升级，最新版通过对应版本线的 npm registry 元数据查询，不要求安装 Node.js。其他独立二进制、无法识别的版本和预发布版本不自动升级。
 
 跨大版本迁移需要另外处理插件、服务端 API 和终端配置，AgentUp 不自动卸载旧包、迁移配置或切换版本线。调研依据、各来源的命令和已知边界见 [OpenCode v1/v2 兼容说明](docs/opencode-versions.md)。
+
+## Desktop 管理
+
+Desktop 与 CLI 分别管理，不共享版本、包名或默认升级目标：
+
+```bash
+agentup list --kind desktop
+agentup list --kind desktop --offline --json
+agentup list --kind all --offline --json
+agentup upgrade codex --kind desktop        # 仅预览
+agentup upgrade codex --kind desktop --yes  # 确认生成的计划
+agentup upgrade --kind desktop --yes        # 仅批量执行可自动升级项
+```
+
+支持检测 ChatGPT/Codex Desktop、Claude Desktop、OpenCode Desktop、Antigravity app。**不管理 Antigravity IDE**，不接管旧版 1.x IDE，不切换安装来源或执行产品迁移。
+
+默认对身份、来源、路径、版本线、架构和退出状态均可确认的 macOS Homebrew Cask，以及已真机验收的 Windows WinGet Antigravity 自动执行升级。其他 WinGet 应用、OpenCode 官方安装包、Linux APT/DNF 授权命令已实现，但在真机验收前默认关闭，可用 `AGENTUP_DESKTOP_CHANNELS=winget,installer,apt,dnf` 临时开启；关闭时提供官方入口引导，结果为 `handed_off`，不是升级成功。详见 [当前支持范围](docs/desktop-support.md)。
+
+多份桌面安装需要通过 `--instance <ID>` 明确目标。Desktop 命令不带 `--yes` 只展示计划，离线模式不执行操作。Web UI 按 Agent 分组，同时列出 CLI 与桌面 App，并用不同颜色的类型标签区分；CLI 与桌面 App 分别确认和执行。三平台的完整方案与实施顺序见 [桌面 App 检测与升级方案](docs/desktop-upgrade-plan.md)。
 
 ## 安装
 
@@ -251,7 +271,7 @@ agentup update
 agentup upgrade agentup
 ```
 
-agentup 会下载当前系统和架构对应的最新 Release，并使用发布的 `checksums.txt` 校验 SHA-256 后替换当前可执行文件。Windows 会在命令退出后完成替换。
+agentup 会下载当前系统和架构对应的最新 Release，并使用发布的 `checksums.txt` 校验 SHA-256 后替换当前可执行文件。Windows 也会在命令返回前完成替换，安装失败会尝试恢复原程序并立即返回错误，不再依赖退出后运行的后台脚本。
 
 `v0.1.0` 尚未内置自身升级能力，需要重新运行一次安装脚本升级到 `v0.2.0`；从 `v0.2.0` 开始可直接使用上述命令升级后续版本。
 

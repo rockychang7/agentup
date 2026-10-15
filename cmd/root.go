@@ -39,7 +39,7 @@ var (
 // rootCmd is the base command.
 var rootCmd = &cobra.Command{
 	Use:           "agentup",
-	Short:         "Unified CLI tool for detecting and upgrading AI coding agent CLIs",
+	Short:         "Detect and upgrade local AI agent CLIs and desktop apps",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	Args:          cobra.NoArgs,
@@ -83,9 +83,7 @@ func Execute() {
 		}
 	}
 	if err := rootCmd.Execute(); err != nil {
-		if _, printed := err.(reportedError); !printed {
-			table.New(rootCmd.ErrOrStderr(), presentationOptions()).Error(err.Error())
-		}
+		printError(rootCmd, err)
 		restore()
 		os.Exit(1)
 	}

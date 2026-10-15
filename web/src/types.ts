@@ -2,6 +2,7 @@ export type ToolName = 'codex' | 'claude-code' | 'opencode' | 'agy'
 export type Check = 'pending' | 'checked' | 'offline' | 'unavailable' | 'failed'
 export type Outcome = 'updated' | 'unchanged' | 'unverified' | 'failed' | 'skipped'
 export type Phase = 'detecting' | 'waiting' | 'upgrading' | 'verifying' | 'finished'
+export type DesktopPhase = Phase | 'checking' | 'needs_elevation' | 'downloading' | 'verifying_package' | 'installing'
 export interface Agent {
   name: ToolName
   installed: boolean
@@ -51,6 +52,78 @@ export interface State {
   active_task: string
   offline: boolean
   revision: number
+  desktop?: DesktopSnapshot
+  desktop_tasks?: DesktopTask[]
+}
+
+export interface DesktopPlan {
+  id: string
+  installation_id: string
+  product_id: string
+  before_version: string
+  target_version: string
+  path: string
+  package_id: string
+  source: string
+  scope: string
+  arch: string
+  channel: string
+  action: 'command' | 'privileged_command' | 'installer' | 'guide'
+  command?: string[]
+  url?: string
+  asset?: { url: string; sha512: string; size: number; publisher: string }
+  requires_exit: boolean
+  requires_admin: boolean
+  standalone?: boolean
+}
+export interface DesktopInstallation {
+  id: string
+  product_id: string
+  name: string
+  kind: 'desktop'
+  installed: boolean
+  version: string
+  latest_version: string
+  latest_check: Check
+  latest_source?: string
+  upgrade_available: boolean
+  path: string
+  package_id: string
+  source: string
+  scope: string
+  arch: string
+  channel: string
+  running: 'running' | 'stopped' | 'unknown'
+  capability: 'automatic' | 'interactive' | 'privileged' | 'guided' | 'blocked'
+  reason: string
+  check_message?: string
+  update_url: string
+  plan?: DesktopPlan
+}
+export interface DesktopSnapshot {
+  installations: DesktopInstallation[]
+  issues: string[]
+}
+export interface DesktopResult {
+  installation_id: string
+  product_id: string
+  name: string
+  outcome: 'updated' | 'no_update' | 'unchanged' | 'unverified' | 'failed' | 'skipped' | 'handed_off' | 'cancelled'
+  old_version: string
+  new_version: string
+  message?: string
+  duration_ms: number
+  command?: string[]
+  url?: string
+}
+export interface DesktopTask {
+  id: string
+  status: 'running' | 'completed' | 'failed' | 'handed_off'
+  started_at: string
+  finished_at?: string
+  items: { installation_id: string; name: string; phase: DesktopPhase; result?: DesktopResult }[]
+  logs: { installation_id: string; stream: string; text: string }[]
+  log_truncated: boolean
 }
 export const toolLabels: Record<ToolName, string> = {
   codex: 'Codex',

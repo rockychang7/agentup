@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -165,6 +166,37 @@ func TestUpdateRejectsChecksumMismatch(t *testing.T) {
 	_, err := updater.Update(context.Background(), false)
 	if err == nil || !strings.Contains(err.Error(), "checksum verification failed") {
 		t.Fatalf("expected checksum verification error, got %v", err)
+	}
+}
+
+func TestUpdateReplacementFailureCleansStagedExecutable(t *testing.T) {
+	assetName := "agentup_0.2.0_windows_amd64.zip"
+	archiveData := makeZipArchive(t, "agentup.exe", []byte("new-agentup"))
+	server := newReleaseServer(t, "v0.2.0", assetName, archiveData, checksumFile(assetName, archiveData))
+	defer server.Close()
+
+	target := filepath.Join(t.TempDir(), "agentup.exe")
+	if err := os.WriteFile(target, []byte("old-agentup"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	updater := New("0.1.0")
+	updater.apiURL = server.URL + "/latest"
+	updater.client = server.Client()
+	updater.goos, updater.goarch = "windows", "amd64"
+	updater.executablePath = func() (string, error) { return target, nil }
+	installErr := errors.New("installation blocked")
+	updater.replace = func(string, string) (bool, error) { return false, installErr }
+
+	result, err := updater.Update(context.Background(), false)
+	if !errors.Is(err, installErr) || result.Updated || result.PendingRestart {
+		t.Fatalf("failed replacement must not report success: result=%+v, err=%v", result, err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "old-agentup" {
+		t.Fatalf("failed replacement modified the original executable: %q, %v", data, err)
+	}
+	staged, err := filepath.Glob(filepath.Join(filepath.Dir(target), ".agentup-update-*"))
+	if err != nil || len(staged) != 0 {
+		t.Fatalf("failed replacement left staged executables: %v, %v", staged, err)
 	}
 }
 

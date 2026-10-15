@@ -23,7 +23,7 @@ try {
   await expect(page.getByRole('heading', { name: 'Agent 概览' })).toBeVisible()
   await expect(page.getByRole('switch')).toBeChecked()
   await expect(page.getByRole('switch')).toBeEnabled({ timeout: 120000 })
-  await expect(page.getByRole('button', { name: '升级 Codex', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '升级 Codex CLI', exact: true })).toBeDisabled()
   assert.ok(!page.url().includes('token='))
   const snapshot = await (await context.request.get(`${launch.origin}/api/state`)).json()
   assert.equal(snapshot.offline, true)
@@ -31,6 +31,26 @@ try {
   assert.equal(snapshot.agents.length, 4)
   assert.ok(!snapshot.scanning)
   await page.screenshot({ path: `${output}/agents-live-zh.png`, fullPage: true })
+  assert.ok(snapshot.desktop.installations.length >= 4)
+  assert.equal(snapshot.desktop_tasks.length, 0)
+  assert.deepEqual(
+    [...new Set(snapshot.desktop.installations.map(info => info.product_id))].sort(),
+    ['antigravity.desktop', 'claude.desktop', 'codex.desktop', 'opencode.desktop'],
+  )
+  assert.ok(snapshot.desktop.installations.every(info => !info.plan))
+  await page.getByRole('radio', { name: '只看 App', exact: true }).click()
+  await expect(page.locator('.agent-groups')).toBeVisible()
+  await expect(page.getByText('Antigravity app', { exact: true })).toBeVisible()
+  await expect(page.getByText('Antigravity IDE', { exact: true })).toHaveCount(0)
+  for (const action of await page.locator('.lane:has(.kind-chip.desktop) .lane-action button').all()) {
+    await expect(action).toBeDisabled()
+  }
+  await page.screenshot({ path: `${output}/desktop-live-zh.png`, fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+  await page.screenshot({ path: `${output}/desktop-live-mobile.png`, fullPage: true })
+  await page.setViewportSize({ width: 1440, height: 960 })
+  await page.getByRole('radio', { name: 'CLI + App', exact: true }).click()
 
   await page.getByRole('combobox').selectOption('en')
   await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible()
@@ -53,6 +73,12 @@ try {
   })
   assert.equal(rejected.status(), 400)
   assert.equal((await rejected.json()).error, 'offline_read_only')
+  const desktopRejected = await context.request.post(`${launch.origin}/api/desktop/upgrades`, {
+    headers: { Origin: launch.origin, 'X-AgentUp-Token': token },
+    data: { plans: ['not-an-executable-plan'], revision: snapshot.revision },
+  })
+  assert.equal(desktopRejected.status(), 400)
+  assert.equal((await desktopRejected.json()).error, 'offline_read_only')
   const crossOrigin = await context.request.post(`${launch.origin}/api/doctor`, {
     headers: { Origin: 'https://untrusted.example', 'X-AgentUp-Token': token }, data: {},
   })
@@ -62,6 +88,7 @@ try {
   assert.deepEqual(errors, [])
   console.log(JSON.stringify({
     version: snapshot.version, installed: snapshot.agents.filter(agent => agent.installed).length,
+    desktops: snapshot.desktop.installations.filter(info => info.installed).map(info => info.product_id),
     bilingual: true, responsive: true, offline: true, authentication: true,
     browserErrors: errors, screenshots: output,
   }, null, 2))

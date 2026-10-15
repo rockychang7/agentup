@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"agentup/internal/config"
+	"agentup/internal/desktop"
 	"agentup/internal/detector"
 	"agentup/internal/diagnostic"
 	"agentup/internal/model"
@@ -59,29 +60,32 @@ type Task struct {
 }
 
 type State struct {
-	Version    string              `json:"version"`
-	OS         string              `json:"os"`
-	Arch       string              `json:"arch"`
-	Agents     []Agent             `json:"agents"`
-	Tasks      []Task              `json:"tasks"`
-	Doctor     *model.DoctorResult `json:"doctor"`
-	Scanning   bool                `json:"scanning"`
-	Diagnosing bool                `json:"diagnosing"`
-	ActiveTask string              `json:"active_task"`
-	Offline    bool                `json:"offline"`
-	Revision   uint64              `json:"revision"`
+	Version      string              `json:"version"`
+	OS           string              `json:"os"`
+	Arch         string              `json:"arch"`
+	Agents       []Agent             `json:"agents"`
+	Tasks        []Task              `json:"tasks"`
+	Doctor       *model.DoctorResult `json:"doctor"`
+	Scanning     bool                `json:"scanning"`
+	Diagnosing   bool                `json:"diagnosing"`
+	ActiveTask   string              `json:"active_task"`
+	Offline      bool                `json:"offline"`
+	Revision     uint64              `json:"revision"`
+	Desktop      desktop.Snapshot    `json:"desktop"`
+	DesktopTasks []DesktopTask       `json:"desktop_tasks"`
 }
 
 type Service struct {
-	mu     sync.Mutex
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	r      runner.Runner
-	p      platform.Platform
-	tools  []config.ToolConfig
-	state  State
-	subs   map[chan struct{}]struct{}
+	mu             sync.Mutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	r              runner.Runner
+	p              platform.Platform
+	tools          []config.ToolConfig
+	state          State
+	subs           map[chan struct{}]struct{}
+	desktopManager desktopBackend
 }
 
 func New(ctx context.Context, version, arch string, r runner.Runner, p platform.Platform, tools []config.ToolConfig) *Service {
@@ -89,8 +93,11 @@ func New(ctx context.Context, version, arch string, r runner.Runner, p platform.
 	if _, ok := r.(*runner.DefaultRunner); ok {
 		r = &runner.DefaultRunner{Context: ctx}
 	}
-	s := &Service{ctx: ctx, cancel: cancel, r: r, p: p, tools: tools, subs: make(map[chan struct{}]struct{})}
+	s := &Service{ctx: ctx, cancel: cancel, r: r, p: p, tools: tools, subs: make(map[chan struct{}]struct{}),
+		desktopManager: desktop.New(ctx, r, p.Name(), arch)}
 	s.state = State{Version: version, OS: p.Name(), Arch: arch, Agents: []Agent{}, Tasks: []Task{}}
+	s.state.Desktop = desktop.Snapshot{Installations: []desktop.Installation{}, Issues: []string{}}
+	s.state.DesktopTasks = []DesktopTask{}
 	for _, tool := range tools {
 		s.state.Agents = append(s.state.Agents, Agent{ToolInfo: model.ToolInfo{Name: tool.Name, LatestCheck: model.CheckPending}})
 	}
@@ -201,6 +208,13 @@ func (s *Service) scan(offline bool) {
 		}
 		set(info)
 	})
+	if s.ctx.Err() == nil {
+		snapshot := s.desktopManager.Scan(offline)
+		s.mu.Lock()
+		s.state.Desktop = snapshot
+		s.changedLocked()
+		s.mu.Unlock()
+	}
 	if !offline && s.ctx.Err() == nil {
 		d.CheckAllLatest(local, set)
 	}

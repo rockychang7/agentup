@@ -13,32 +13,53 @@ import (
 
 // liveFrame redraws a bounded block only on a real terminal; pipes never receive cursor codes.
 type liveFrame struct {
-	printer *Printer
-	lines   int
+	printer      *Printer
+	lines        int
+	content      string
+	cursorHidden bool
 }
 
 func (f *liveFrame) draw(lines []string) {
 	if !f.printer.Interactive {
 		return
 	}
-	if f.lines > 0 {
-		fmt.Fprintf(f.printer.Output, "\x1b[%dA", f.lines)
+	rendered := make([]string, len(lines))
+	for i, line := range lines {
+		rendered[i] = ansi.Truncate(line, f.printer.Width-1, "...")
 	}
-	for _, line := range lines {
-		fmt.Fprintf(f.printer.Output, "\r\x1b[2K%s\n", ansi.Truncate(line, f.printer.Width-1, "..."))
+	content := strings.Join(rendered, "\n")
+	if f.lines == len(lines) && f.content == content {
+		return
+	}
+
+	var frame strings.Builder
+	if len(lines) > 0 && !f.cursorHidden {
+		frame.WriteString("\x1b[?25l")
+		f.cursorHidden = true
+	}
+	if f.lines > 0 {
+		fmt.Fprintf(&frame, "\x1b[%dA", f.lines)
+	}
+	for _, line := range rendered {
+		fmt.Fprintf(&frame, "\r\x1b[2K%s\n", line)
 	}
 	for i := len(lines); i < f.lines; i++ {
-		fmt.Fprint(f.printer.Output, "\r\x1b[2K\n")
+		frame.WriteString("\r\x1b[2K\n")
 	}
 	if f.lines > len(lines) {
-		fmt.Fprintf(f.printer.Output, "\x1b[%dA", f.lines-len(lines))
+		fmt.Fprintf(&frame, "\x1b[%dA", f.lines-len(lines))
 	}
+	if len(lines) == 0 && f.cursorHidden {
+		frame.WriteString("\x1b[?25h")
+		f.cursorHidden = false
+	}
+	fmt.Fprint(f.printer.Output, frame.String())
 	f.lines = len(lines)
+	f.content = content
 }
 
 func (f *liveFrame) clear() {
 	f.draw(nil)
-	f.lines = 0
 }
 
 type taskState struct {
@@ -56,6 +77,7 @@ type Progress struct {
 	stop      chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
+	closed    bool
 }
 
 func NewProgress(p *Printer, names []model.ToolName) *Progress {
@@ -94,6 +116,9 @@ func NewProgress(p *Printer, names []model.ToolName) *Progress {
 func (p *Progress) Observe(event model.UpgradeEvent) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
 	state := p.tasks[event.Name]
 	if event.Source == "" {
 		event.Source = state.event.Source
@@ -158,6 +183,7 @@ func (p *Progress) Close() {
 		<-p.done
 		p.mu.Lock()
 		defer p.mu.Unlock()
+		p.closed = true
 		p.frame.clear()
 	})
 }
@@ -170,6 +196,7 @@ type Scan struct {
 	names   []model.ToolName
 	tools   map[model.ToolName]model.ToolInfo
 	phase   string
+	closed  bool
 }
 
 func NewScan(p *Printer, names []model.ToolName) *Scan {
@@ -182,6 +209,9 @@ func NewScan(p *Printer, names []model.ToolName) *Scan {
 func (s *Scan) Update(info model.ToolInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	s.tools[info.Name] = info
 	s.renderLocked()
 }
@@ -189,6 +219,9 @@ func (s *Scan) Update(info model.ToolInfo) {
 func (s *Scan) SetPhase(phase string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	s.phase = phase
 	s.renderLocked()
 }
@@ -209,5 +242,6 @@ func (s *Scan) renderLocked() {
 func (s *Scan) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed = true
 	s.frame.clear()
 }

@@ -57,6 +57,9 @@ func TestRunSelfUpdateSuccess(t *testing.T) {
 	if !strings.Contains(output.String(), "Updated agentup from 0.1.0 to v0.2.0") {
 		t.Fatalf("unexpected output %q", output.String())
 	}
+	if strings.Contains(output.String(), "Downloaded") || strings.Contains(output.String(), "after this command exits") {
+		t.Fatalf("completed installation must not claim it is still pending: %q", output.String())
+	}
 }
 
 func TestUpgradeCommandRoutesAgentupToSelfUpdater(t *testing.T) {
@@ -132,10 +135,14 @@ func TestRunSelfUpdateError(t *testing.T) {
 
 	appSelfUpdater = &fakeSelfUpdater{err: errors.New("network unavailable")}
 	command := &cobra.Command{}
-	command.SetOut(&bytes.Buffer{})
+	var output bytes.Buffer
+	command.SetOut(&output)
 
 	err := runSelfUpdate(command, false)
 	if err == nil || !strings.Contains(err.Error(), "network unavailable") {
 		t.Fatalf("expected update error, got %v", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("failed update printed a success summary: %q", output.String())
 	}
 }

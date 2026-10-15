@@ -171,6 +171,87 @@ func TestProgressTerminalClearsBlockAndStopsTicker(t *testing.T) {
 	if !strings.Contains(out.String(), "\x1b[2K") || !strings.Contains(ansi.Strip(out.String()), "failed") {
 		t.Fatalf("expected a redrawn task block: %q", out.String())
 	}
+	if strings.Count(out.String(), "\x1b[?25l") != 1 || strings.Count(out.String(), "\x1b[?25h") != 1 ||
+		!strings.HasSuffix(out.String(), "\x1b[?25h") {
+		t.Fatalf("progress must hide the cursor once and restore it on close: %q", out.String())
+	}
+	length := out.Len()
+	p.Observe(model.UpgradeEvent{Name: model.ToolCodex, Phase: model.PhaseUpgrading})
+	if out.Len() != length {
+		t.Fatal("an event after close redrew the progress block")
+	}
+}
+
+type frameWriter struct {
+	bytes.Buffer
+	writes int
+}
+
+func (w *frameWriter) Write(data []byte) (int, error) {
+	w.writes++
+	return w.Buffer.Write(data)
+}
+
+func TestLiveFrameBatchesOutputAndSkipsUnchangedContent(t *testing.T) {
+	var out frameWriter
+	printer := New(&out, Options{Width: 40})
+	printer.Interactive = true
+	frame := liveFrame{printer: printer}
+	frame.draw([]string{"Upgrade", "agentup: upgrading"})
+	if out.writes != 1 || !strings.HasPrefix(out.String(), "\x1b[?25l") {
+		t.Fatalf("initial frame must hide the cursor and use a single write: %q", out.String())
+	}
+	length := out.Len()
+	frame.draw([]string{"Upgrade", "agentup: upgrading"})
+	if out.Len() != length || out.writes != 1 {
+		t.Fatal("unchanged content was redrawn")
+	}
+	frame.draw([]string{"Upgrade", "agentup: finished"})
+	if out.writes != 2 {
+		t.Fatal("changed frame must use a single write")
+	}
+	frame.clear()
+	if out.writes != 3 || frame.lines != 0 || frame.cursorHidden {
+		t.Fatalf("frame was not cleared: writes=%d, lines=%d, hidden=%v", out.writes, frame.lines, frame.cursorHidden)
+	}
+	length = out.Len()
+	frame.clear()
+	if out.Len() != length {
+		t.Fatal("clearing a closed frame wrote more cursor controls")
+	}
+}
+
+func TestLiveFrameShrinkingClearsOldRows(t *testing.T) {
+	var out bytes.Buffer
+	printer := New(&out, Options{Width: 40})
+	printer.Interactive = true
+	frame := liveFrame{printer: printer}
+	frame.draw([]string{"first", "second", "third"})
+	out.Reset()
+	frame.draw([]string{"replacement"})
+	if got, want := out.String(), "\x1b[3A\r\x1b[2Kreplacement\n\r\x1b[2K\n\r\x1b[2K\n\x1b[2A"; got != want {
+		t.Fatalf("shrinking must erase old rows and keep the cursor below the frame:\ngot: %q\nwant: %q", got, want)
+	}
+	frame.clear()
+}
+
+func TestScanRestoresCursorAndIgnoresChangesAfterClose(t *testing.T) {
+	var out bytes.Buffer
+	printer := New(&out, Options{})
+	printer.Interactive = true
+	scan := NewScan(printer, []model.ToolName{model.ToolCodex})
+	scan.Close()
+	if strings.Count(out.String(), "\x1b[?25l") != 1 || strings.Count(out.String(), "\x1b[?25h") != 1 ||
+		!strings.HasSuffix(out.String(), "\x1b[?25h") {
+		t.Fatalf("scan did not restore the cursor: %q", out.String())
+	}
+	length := out.Len()
+	scan.SetPhase("Checking latest...")
+	scan.Update(model.ToolInfo{Name: model.ToolCodex, Installed: true, Version: "1.0.0"})
+	scan.Close()
+	if out.Len() != length {
+		t.Fatal("closed scan redrew its frame")
+	}
 }
 
 func TestScanExternalVersionCannotInjectTerminalEscapes(t *testing.T) {

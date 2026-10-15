@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -27,6 +28,33 @@ var outputFlags = struct {
 type reportedError struct{ message string }
 
 func (e reportedError) Error() string { return e.message }
+
+type actionableError struct {
+	message string
+	hint    string
+	cause   error
+}
+
+func (e actionableError) Error() string { return e.message }
+func (e actionableError) Unwrap() error { return e.cause }
+
+func printError(cmd *cobra.Command, err error) {
+	var reported reportedError
+	if errors.As(err, &reported) {
+		return
+	}
+	p := notices(cmd)
+	p.Error(err.Error())
+	var actionable actionableError
+	if errors.As(err, &actionable) {
+		p.Line("")
+		p.Line(actionable.hint)
+		if outputFlags.Verbose && actionable.cause != nil {
+			p.Line("")
+			p.Notice("Details: " + actionable.cause.Error())
+		}
+	}
+}
 
 func writeJSON(cmd *cobra.Command, value any) error {
 	encoder := json.NewEncoder(cmd.OutOrStdout())
