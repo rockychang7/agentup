@@ -1,7 +1,9 @@
 package detector
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
@@ -21,16 +23,24 @@ type Detector struct {
 	platform          platform.Platform
 	tools             []config.ToolConfig
 	enableLatestCheck bool
+	context           context.Context
+	httpClient        *http.Client
 }
 
 // New creates a new Detector with the given runner, platform, and tool configs.
 // Latest version checking is enabled by default.
 func New(r runner.Runner, p platform.Platform, tools []config.ToolConfig) *Detector {
+	ctx := context.Background()
+	if base, ok := r.(*runner.DefaultRunner); ok && base.Context != nil {
+		ctx = base.Context
+	}
 	return &Detector{
 		runner:            runner.WithTimeout(r, 15*time.Second),
 		platform:          p,
 		tools:             tools,
 		enableLatestCheck: true,
+		context:           ctx,
+		httpClient:        &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
@@ -38,12 +48,9 @@ func New(r runner.Runner, p platform.Platform, tools []config.ToolConfig) *Detec
 // Use this when you only need the installed version (e.g., during upgrades)
 // to avoid unnecessary network requests.
 func NewWithoutLatestCheck(r runner.Runner, p platform.Platform, tools []config.ToolConfig) *Detector {
-	return &Detector{
-		runner:            runner.WithTimeout(r, 15*time.Second),
-		platform:          p,
-		tools:             tools,
-		enableLatestCheck: false,
-	}
+	d := New(r, p, tools)
+	d.enableLatestCheck = false
+	return d
 }
 
 // DetectAll detects all configured tools and returns their info.
@@ -121,6 +128,14 @@ func (d *Detector) detectLocal(tool config.ToolConfig) model.ToolInfo {
 	// Step 1: Check if the binary exists in PATH
 	path, err := d.runner.LookPath(tool.BinaryName)
 	if err != nil {
+		for _, alias := range tool.BinaryAliases {
+			path, err = d.runner.LookPath(alias)
+			if err == nil {
+				break
+			}
+		}
+	}
+	if err != nil {
 		// Binary not found — tool is not installed
 		return info
 	}
@@ -130,6 +145,13 @@ func (d *Detector) detectLocal(tool config.ToolConfig) model.ToolInfo {
 
 	// Step 2: Get the version
 	info.Version = d.getVersion(tool, path)
+
+	resolved, err := config.ForVersion(tool, info.Version)
+	if err != nil {
+		info.UpgradeSupported = false
+		return info
+	}
+	tool = resolved
 
 	// Step 3: Determine the install method
 	info.InstallMethod = d.detectInstallMethod(tool, path)
@@ -181,6 +203,10 @@ func (d *Detector) getVersion(tool config.ToolConfig, path string) string {
 // detectInstallMethod determines how the tool was installed.
 // It checks package managers in priority order based on the platform.
 func (d *Detector) detectInstallMethod(tool config.ToolConfig, binaryPath string) model.InstallMethod {
+	// Official curl installs own this path even when an old global package remains.
+	if tool.Name == model.ToolOpenCode && openCodeNativePath(binaryPath) {
+		return model.InstallMethodSelfUpdate
+	}
 	managers := d.platform.SupportedManagers()
 
 	for _, mgr := range managers {

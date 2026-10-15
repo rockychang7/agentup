@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"path"
 	"strings"
 
 	"agentup/internal/config"
@@ -27,7 +28,7 @@ func (d *Detector) detectBrew(tool config.ToolConfig) model.InstallMethod {
 	}
 
 	// brew list outputs the formula name and installed files if installed
-	if strings.Contains(stdout, tool.BrewFormula) {
+	if strings.Contains(stdout, path.Base(tool.BrewFormula)) {
 		return model.InstallMethodBrew
 	}
 

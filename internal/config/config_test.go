@@ -166,3 +166,64 @@ func TestFindTool_NonExistingTool(t *testing.T) {
 		t.Fatal("expected nil for non-existing tool")
 	}
 }
+
+func TestForVersionOpenCode(t *testing.T) {
+	tool := *FindTool(model.ToolOpenCode)
+	for _, tt := range []struct {
+		version, npm, brew, scoop string
+		wantErr                   bool
+	}{
+		{"1.19.0", "opencode-ai", "opencode", "opencode", false},
+		{"v2.0.29", "@opencode/cli", "anomalyco/tap/opencode-v2", "", false},
+		{"unknown", "", "", "", true},
+		{"local", "", "", "", true},
+		{"3.0.0", "", "", "", true},
+		{"2.1.0-beta.1", "", "", "", true},
+	} {
+		t.Run(tt.version, func(t *testing.T) {
+			got, err := ForVersion(tool, tt.version)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("unexpected resolution error: %v", err)
+			}
+			if !tt.wantErr && (got.NpmPackage != tt.npm || got.BrewFormula != tt.brew || got.ScoopPackage != tt.scoop) {
+				t.Fatalf("wrong distribution: %+v", got)
+			}
+		})
+	}
+	if tool.NpmPackage != "opencode-ai" {
+		t.Fatal("version resolution mutated the default configuration")
+	}
+}
+
+func TestForVersionOtherToolsUnchanged(t *testing.T) {
+	tool := *FindTool(model.ToolCodex)
+	got, err := ForVersion(tool, "unknown")
+	if err != nil || got.NpmPackage != tool.NpmPackage {
+		t.Fatalf("non-OpenCode configuration changed: %+v, %v", got, err)
+	}
+}
+
+func TestValidateUpgradeVersion(t *testing.T) {
+	for _, tt := range []struct {
+		name          model.ToolName
+		current, next string
+		wantErr       bool
+	}{
+		{model.ToolOpenCode, "1.18.0", "1.19.0", false},
+		{model.ToolOpenCode, "v2.0.28", "2.0.29+build.1", false},
+		{model.ToolOpenCode, "1.19.0", "2.0.29", true},
+		{model.ToolOpenCode, "2.0.29", "1.19.0", true},
+		{model.ToolOpenCode, "2.0.29", "2.1.0-beta.1", true},
+		{model.ToolOpenCode, "2.0.29", "3.0.0", true},
+		{model.ToolOpenCode, "unknown", "2.0.29", true},
+		{model.ToolOpenCode, "2.0.29", "unknown", true},
+		{model.ToolCodex, "1.0.0", "2.0.0", false},
+	} {
+		t.Run(string(tt.name)+"/"+tt.current+"/"+tt.next, func(t *testing.T) {
+			err := ValidateUpgradeVersion(*FindTool(tt.name), tt.current, tt.next)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}

@@ -3,6 +3,7 @@ package detector
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 
 	"golang.org/x/mod/semver"
@@ -24,7 +25,16 @@ func (d *Detector) CheckLatest(info model.ToolInfo) model.ToolInfo {
 		if tool.Name != info.Name {
 			continue
 		}
+		resolved, err := config.ForVersion(tool, info.Version)
+		if err != nil {
+			info.CheckMessage = err.Error()
+			return info
+		}
+		tool = resolved
 		latest, err := d.checkLatestVersion(tool, info.InstallMethod, info.Version)
+		if err == nil && latest != "" {
+			err = config.ValidateUpgradeVersion(tool, info.Version, latest)
+		}
 		if err != nil {
 			info.LatestCheck = model.CheckFailed
 			info.CheckMessage = err.Error()
@@ -53,6 +63,9 @@ func (d *Detector) checkLatestVersion(tool config.ToolConfig, method model.Insta
 	case model.InstallMethodWinget:
 		return d.checkWingetLatestVersion(tool, current)
 	case model.InstallMethodSelfUpdate:
+		if tool.Name == model.ToolOpenCode {
+			return d.checkOpenCodeNativeLatest(tool)
+		}
 		if tool.NpmPackage != "" {
 			return d.checkNpmLatestVersion(tool)
 		}
@@ -97,6 +110,7 @@ func (d *Detector) checkNpmLatestVersion(tool config.ToolConfig) (string, error)
 type brewInfoJSON struct {
 	Formulae []struct {
 		Name     string `json:"name"`
+		FullName string `json:"full_name"`
 		Versions struct {
 			Stable string `json:"stable"`
 		} `json:"versions"`
@@ -127,7 +141,8 @@ func (d *Detector) checkBrewLatestVersion(tool config.ToolConfig) (string, error
 		}
 	} else {
 		for _, formula := range info.Formulae {
-			if formula.Name == tool.BrewFormula {
+			if formula.Name == tool.BrewFormula || formula.FullName == tool.BrewFormula ||
+				formula.Name == path.Base(tool.BrewFormula) {
 				return registryVersion(formula.Versions.Stable)
 			}
 		}

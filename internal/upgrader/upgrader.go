@@ -53,6 +53,11 @@ func (u *Upgrader) SetStreamLogs(enabled bool) {
 func (u *Upgrader) Preview(info model.ToolInfo) ([]string, error) {
 	for _, tool := range u.tools {
 		if tool.Name == info.Name {
+			resolved, err := config.ForVersion(tool, info.Version)
+			if err != nil {
+				return nil, err
+			}
+			tool = resolved
 			name, args, err := u.buildUpgradeCommand(tool, info.InstallMethod, info.Path)
 			if err != nil {
 				return nil, err
@@ -196,8 +201,15 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) mode
 
 	result.OldVersion = info.Version
 
+	resolved, err := config.ForVersion(tool, info.Version)
+	if err != nil {
+		result.Message = err.Error()
+		return result
+	}
+	tool = resolved
+
 	// Step 1: Check if upgrade is supported
-	if !tool.UpgradeSupported {
+	if !tool.UpgradeSupported || !info.UpgradeSupported {
 		result.Message = fmt.Sprintf("automatic upgrade not supported, please upgrade manually: %s", tool.ManualUpgradeURL)
 		return result
 	}
@@ -261,6 +273,10 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) mode
 		result.Status = model.UpgradeStatusUnverified
 		result.Outcome = model.OutcomeUnverified
 		result.Message = "upgrade command succeeded, but the version change could not be verified"
+	} else if err := config.ValidateUpgradeVersion(tool, result.OldVersion, result.NewVersion); err != nil {
+		result.Status = model.UpgradeStatusFailed
+		result.Outcome = model.OutcomeFailed
+		result.Message = fmt.Sprintf("upgrade verification failed: %v; check the package source and PATH", err)
 	} else if versionDecreased(result.OldVersion, result.NewVersion) {
 		result.Status = model.UpgradeStatusFailed
 		result.Outcome = model.OutcomeFailed
@@ -280,6 +296,9 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) mode
 func (u *Upgrader) buildUpgradeCommand(tool config.ToolConfig, method model.InstallMethod, binaryPath string) (string, []string, error) {
 	switch method {
 	case model.InstallMethodSelfUpdate:
+		if tool.Name == model.ToolOpenCode {
+			return binaryPath, []string{"upgrade", "--method", "curl"}, nil
+		}
 		if len(tool.SelfUpdateArgs) == 0 {
 			return "", nil, fmt.Errorf("self-update command not configured for %s", tool.Name)
 		}
@@ -287,8 +306,14 @@ func (u *Upgrader) buildUpgradeCommand(tool config.ToolConfig, method model.Inst
 	case model.InstallMethodNpm:
 		return "npm", []string{"install", "-g", tool.NpmPackage + "@latest"}, nil
 	case model.InstallMethodPnpm:
+		if tool.Name == model.ToolOpenCode && tool.NpmPackage == "@opencode/cli" {
+			return "pnpm", []string{"add", "-g", "--allow-build=@opencode/cli", "@opencode/cli@latest"}, nil
+		}
 		return "pnpm", []string{"add", "-g", tool.NpmPackage}, nil
 	case model.InstallMethodYarn:
+		if tool.Name == model.ToolOpenCode && tool.NpmPackage == "@opencode/cli" {
+			return "yarn", []string{"global", "add", "@opencode/cli@latest"}, nil
+		}
 		return "yarn", []string{"global", "upgrade", tool.NpmPackage}, nil
 	case model.InstallMethodBrew:
 		if tool.BrewCask {
@@ -296,8 +321,14 @@ func (u *Upgrader) buildUpgradeCommand(tool config.ToolConfig, method model.Inst
 		}
 		return "brew", []string{"upgrade", tool.BrewFormula}, nil
 	case model.InstallMethodWinget:
+		if tool.WingetID == "" {
+			return "", nil, fmt.Errorf("winget package not configured for %s", tool.Name)
+		}
 		return "winget", []string{"upgrade", tool.WingetID}, nil
 	case model.InstallMethodScoop:
+		if tool.ScoopPackage == "" {
+			return "", nil, fmt.Errorf("scoop package not configured for %s", tool.Name)
+		}
 		return "scoop", []string{"update", tool.ScoopPackage}, nil
 	default:
 		return "", nil, fmt.Errorf("install method '%s' does not support automatic upgrade", method)

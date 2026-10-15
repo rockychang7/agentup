@@ -56,6 +56,31 @@ test('upgrades require confirmation and tasks survive reload', async ({ page }, 
   await noOverflow(page)
 })
 
+for (const scenario of [
+  { name: 'v1', command: ['npm', 'install', '-g', 'opencode-ai@latest'] },
+  { name: 'v2', command: ['pnpm', 'add', '-g', '--allow-build=@opencode/cli', '@opencode/cli@latest'] },
+  { name: 'native', command: ['C:\\Users\\Local User\\.opencode\\bin\\opencode.exe', 'upgrade', '--method', 'curl'] },
+]) {
+  test(`OpenCode ${scenario.name} confirms and displays the matching upgrade command`, async ({ page }, info) => {
+    await launch(page, `${info.project.name}-opencode-${scenario.name}`)
+    const command = scenario.command.map(arg => /[\s"'`]/.test(arg) ? JSON.stringify(arg) : arg).join(' ')
+    await page.getByRole('button', { name: 'Show details OpenCode', exact: true }).click()
+    await expect(page.getByText(command, { exact: true })).toBeVisible()
+    await noOverflow(page)
+    await page.getByRole('button', { name: 'Upgrade OpenCode', exact: true }).click()
+    await expect(page.getByRole('dialog')).toContainText(command)
+    await page.screenshot({ path: info.outputPath('opencode-confirmation.png'), fullPage: true })
+    await noOverflow(page)
+    const request = page.waitForRequest(req => new URL(req.url()).pathname === '/api/upgrades' && req.method() === 'POST')
+    await page.getByRole('button', { name: 'Confirm and upgrade', exact: true }).click()
+    expect((await request).postDataJSON().tools).toEqual(['opencode'])
+    await expect(page.getByText('Updated', { exact: true })).toBeVisible()
+    const state = await (await page.request.get('/api/state')).json()
+    expect(state.tasks[0].tools[0].result.command).toEqual(scenario.command)
+    await noOverflow(page)
+  })
+}
+
 test('offline mode disables mutations and diagnosis is bilingual', async ({ page }, info) => {
   await launch(page, `${info.project.name}-offline`)
   await page.getByRole('switch').click()

@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url'
 const assets = fileURLToPath(new URL('../../internal/webui/assets/', import.meta.url))
 const sessions = new Map()
 const labels = ['codex', 'claude-code', 'opencode', 'agy']
-function newSession() {
+function newSession(key) {
   const state = {
-    version: '0.5.1-dev', os: 'Windows', arch: 'amd64', offline: false,
+    version: '0.6.0-dev', os: 'Windows', arch: 'amd64', offline: false,
     revision: 1, scanning: false, diagnosing: false, active_task: '', tasks: [], doctor: null,
     agents: labels.map((name, i) => ({
       name, installed: i !== 2, version: i === 0 ? '1.2.0' : i === 1 ? '2.1.0' : i === 3 ? '0.3.5' : '',
@@ -19,6 +19,21 @@ function newSession() {
       upgrade_supported: i !== 2, latest_check: i === 3 ? 'unavailable' : 'checked',
       command: i === 2 ? [] : i === 3 ? ['C:\\tools\\agy.exe', 'update'] : ['npm', 'install', '-g', i === 0 ? '@openai/codex@latest' : '@anthropic-ai/claude-code@latest'],
     })),
+  }
+  const scenario = key.match(/-opencode-(v1|v2|native)$/)?.[1]
+  if (scenario) {
+    const nativePath = 'C:\\Users\\Local User\\.opencode\\bin\\opencode.exe'
+    const v1 = scenario === 'v1'
+    Object.assign(state.agents.find(agent => agent.name === 'opencode'), {
+      installed: true, version: v1 ? '1.18.0' : '2.0.28',
+      latest_version: v1 ? '1.19.0' : '2.0.29', upgrade_available: true,
+      upgrade_supported: true, latest_check: 'checked',
+      install_method: scenario === 'native' ? 'self-update' : v1 ? 'npm' : 'pnpm',
+      path: scenario === 'native' ? nativePath : 'C:\\Users\\Local User\\AppData\\Roaming\\npm\\opencode.cmd',
+      command: scenario === 'native' ? [nativePath, 'upgrade', '--method', 'curl']
+        : v1 ? ['npm', 'install', '-g', 'opencode-ai@latest']
+          : ['pnpm', 'add', '-g', '--allow-build=@opencode/cli', '@opencode/cli@latest'],
+    })
   }
   return { state, streams: new Set(), stopped: false }
 }
@@ -50,7 +65,7 @@ const handle = async (req, res) => {
     }
     if (url.pathname === '/api/session') {
       if (!body.token) return json(res, 401, { error: 'unauthorized' })
-      if (!sessions.has(body.token)) sessions.set(body.token, newSession())
+      if (!sessions.has(body.token)) sessions.set(body.token, newSession(body.token))
       res.setHeader('Set-Cookie', `${cookieName}=${encodeURIComponent(body.token)}; Path=/api/; HttpOnly; SameSite=Strict`)
       return json(res, 200, { ok: true })
     }
