@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { AppWindow, ArrowRight, ArrowUp, Check, ChevronDown, ChevronUp, CircleAlert, Copy, Download, ExternalLink, LoaderCircle, ShieldCheck, Terminal, X } from 'lucide-react'
+import { AppWindow, ArrowRight, ArrowUp, Check, ChevronDown, CircleAlert, Copy, Download, ExternalLink, LoaderCircle, ShieldCheck, Terminal, X } from 'lucide-react'
 import type { Dictionary } from './i18n'
 import { toolLabels } from './types'
 import type { Agent, DesktopInstallation, DesktopPlan, State, ToolName } from './types'
 import { Badge, CopyButton, IconButton, KindChip, displayVersion, formatCommand, label, sourceLabel } from './ui'
-import type { Kind, Tone } from './ui'
+import type { Tone } from './ui'
 
-export type KindFilter = 'all' | Kind
+export type KindFilter = 'all' | 'cli' | 'desktop'
 type StatusFilter = 'all' | 'updates' | 'installed'
 
 const families: ToolName[] = ['codex', 'claude-code', 'opencode', 'agy']
@@ -39,23 +39,41 @@ function appStatus(info: DesktopInstallation, t: Dictionary): [string, Tone] {
   return [t.unknownLatest, 'muted']
 }
 
+// A confirmed "nothing newer" result greys the action out; an unknown latest version does not.
+const upToDate = (item: { upgrade_available: boolean; latest_check: string }) => item.latest_check === 'checked' && !item.upgrade_available
 const cliUpgradeable = (agent: Agent) => agent.installed && agent.upgrade_supported && !!agent.command?.length
+const cliActionable = (agent: Agent) => cliUpgradeable(agent) && agent.latest_check !== 'pending' && !upToDate(agent)
 // Batch upgrades only include automatic plans that need no separate confirmation.
 const appAutomatic = (info: DesktopInstallation) => info.installed && info.capability === 'automatic' && info.plan?.action === 'command' && !info.plan.standalone
 
-export function Overview({ state, t, busy, submitting, kind, setKind, onError, onUpgradeCli, onRunDesktop }: {
-  state: State; t: Dictionary; busy: boolean; submitting: boolean; kind: KindFilter; setKind: (kind: KindFilter) => void
-  onError: (code: string) => void; onUpgradeCli: (tools: ToolName[]) => void; onRunDesktop: (plans: string[], revision: number) => void
+// Items in a queued or running task, with the phase to show on their row.
+function activeItems(state: State) {
+  const ids = new Set(state.active_tasks)
+  const cli = new Map<string, string>()
+  const apps = new Map<string, string>()
+  const phase = (status: string, current: string, done: boolean) => status === 'queued' ? 'queued' : done ? 'refreshing' : current
+  for (const task of state.tasks) if (ids.has(task.id)) for (const tool of task.tools) cli.set(tool.name, phase(task.status, tool.phase, !!tool.result))
+  for (const task of state.desktop_tasks || []) if (ids.has(task.id)) for (const item of task.items) apps.set(item.installation_id, phase(task.status, item.phase, !!item.result))
+  return { cli, apps }
+}
+
+export function Overview({ state, t, locked, submitting, kind, setKind, onError, onUpgradeCli, onRunDesktop }: {
+  state: State; t: Dictionary; locked: boolean; submitting: boolean; kind: KindFilter; setKind: (kind: KindFilter) => void
+  onError: (code: string) => void
+  onUpgradeCli: (tools: ToolName[], done: () => void) => void
+  onRunDesktop: (plans: string[], revision: number, names: string[], done: () => void) => void
 }) {
   const [status, setStatus] = useState<StatusFilter>('all')
   const [expanded, setExpanded] = useState<string[]>([])
   const [cliConfirm, setCliConfirm] = useState<ToolName[] | null>(null)
   const [appConfirm, setAppConfirm] = useState<{ plans: DesktopPlan[]; revision: number } | null>(null)
-  const disabled = busy || state.offline
   const installations = state.desktop?.installations || []
   const issues = state.desktop?.issues || []
-  const cliUpdates = state.agents.filter(agent => cliUpgradeable(agent) && agent.upgrade_available)
-  const appUpdates = installations.filter(appAutomatic)
+  const active = activeItems(state)
+  const cliUpdates = state.agents.filter(agent => cliActionable(agent) && agent.upgrade_available && !active.cli.has(agent.name))
+  const appUpdates = installations.filter(info => appAutomatic(info) && !active.apps.has(info.id))
+  const installedCli = state.agents.filter(agent => agent.installed)
+  const installedApps = installations.filter(info => info.installed)
   const toggle = (id: string) => setExpanded(open => open.includes(id) ? open.filter(item => item !== id) : [...open, id])
   const matches = (installed: boolean, update: boolean) => status === 'all' || (status === 'updates' ? update : installed)
   const groups = families.map(family => ({
@@ -70,29 +88,30 @@ export function Overview({ state, t, busy, submitting, kind, setKind, onError, o
     setAppConfirm({ plans, revision: state.revision })
   }
   const cliAgents = state.agents.filter(agent => cliConfirm?.includes(agent.name))
+  const appName = (plan: DesktopPlan) => installations.find(info => info.id === plan.installation_id)?.name || plan.product_id
 
   return <>
-    <section className="summary-grid" aria-label={t.total}>
-      <SummaryCard kind="cli" icon={<Terminal size={18} />} title={t.cliTitle} hint={t.cliHint} stats={[
-        [state.agents.filter(agent => agent.installed).length, t.installed],
-        [state.agents.filter(agent => agent.upgrade_available).length, t.updates],
-        [state.agents.filter(agent => agent.installed && (agent.latest_check === 'failed' || agent.latest_check === 'unavailable' || !agent.upgrade_supported)).length, t.attention],
-      ]} action={<button type="button" className="button kind" disabled={disabled || !cliUpdates.length} onClick={() => setCliConfirm(cliUpdates.map(agent => agent.name))}><ArrowUp size={15} />{t.upgradeAllCli} ({cliUpdates.length})</button>} />
-      <SummaryCard kind="desktop" icon={<AppWindow size={18} />} title={t.appTitle} hint={t.appHint} stats={[
-        [installations.filter(info => info.installed).length, t.installed],
-        [installations.filter(info => info.upgrade_available).length, t.updates],
-        [installations.filter(info => info.installed && info.capability !== 'automatic').length, t.needsManual],
-      ]} action={<button type="button" className="button kind" disabled={disabled || !appUpdates.length} onClick={() => confirmApps(appUpdates)}><ArrowUp size={15} />{t.upgradeAutoApps} ({appUpdates.length})</button>} />
+    <section className="stats panel" aria-label={t.total}>
+      <Stat label={t.installed} value={installedCli.length + installedApps.length} detail={`CLI ${installedCli.length} · App ${installedApps.length}`} />
+      <Stat label={t.updates} tone="warning" value={state.agents.filter(agent => agent.upgrade_available).length + installations.filter(info => info.upgrade_available).length}
+        detail={`CLI ${state.agents.filter(agent => agent.upgrade_available).length} · App ${installations.filter(info => info.upgrade_available).length}`} />
+      <Stat label={t.needsManual} value={installedCli.filter(agent => !agent.upgrade_supported).length + installedApps.filter(info => info.capability !== 'automatic' && info.capability !== 'interactive').length} detail={t.needsManualHint} />
+      <Stat label={t.inProgress} tone="accent" value={active.cli.size + active.apps.size} detail={active.cli.size + active.apps.size ? t.queueHint : t.idle} />
     </section>
     <div className="overview-toolbar">
-      <div className="kind-switch" role="radiogroup" aria-label={t.agentKind}>
-        {([['all', t.kindAll], ['cli', t.kindCli], ['desktop', t.kindApp]] as const).map(([key, text]) => <button type="button" role="radio" key={key} aria-checked={kind === key} onClick={() => setKind(key)}>
-          {key === 'cli' ? <Terminal size={14} /> : key === 'desktop' ? <AppWindow size={14} /> : null}{text}
-        </button>)}
+      <div className="filters">
+        <div className="segmented" role="radiogroup" aria-label={t.agentKind}>
+          {([['all', t.kindAll], ['cli', t.kindCli], ['desktop', t.kindApp]] as const).map(([key, text]) => <button type="button" role="radio" key={key} aria-checked={kind === key} onClick={() => setKind(key)}>
+            {key === 'cli' ? <Terminal size={14} /> : key === 'desktop' ? <AppWindow size={14} /> : null}{text}
+          </button>)}
+        </div>
+        <div className="status-filter" role="group" aria-label={t.filters}>
+          {(['all', 'updates', 'installed'] as const).map(key => <button type="button" key={key} aria-pressed={status === key} onClick={() => setStatus(key)}>{key === 'all' ? t.all : key === 'updates' ? t.updateFilter : t.installed}</button>)}
+        </div>
       </div>
-      <div className="status-filter" role="group" aria-label={t.filters}>
-        <span>{t.status}</span>
-        {(['all', 'updates', 'installed'] as const).map(key => <button type="button" key={key} aria-pressed={status === key} onClick={() => setStatus(key)}>{key === 'all' ? t.all : key === 'updates' ? t.updateFilter : t.installed}</button>)}
+      <div className="batch-actions">
+        {kind !== 'desktop' && <button type="button" className="button secondary" disabled={locked || !cliUpdates.length} onClick={() => setCliConfirm(cliUpdates.map(agent => agent.name))}><ArrowUp size={15} />{t.upgradeAllCli} ({cliUpdates.length})</button>}
+        {kind !== 'cli' && <button type="button" className="button secondary" title={t.upgradeAutoAppsHint} disabled={locked || !appUpdates.length} onClick={() => confirmApps(appUpdates)}><ArrowUp size={15} />{t.upgradeAutoApps} ({appUpdates.length})</button>}
       </div>
     </div>
     {kind !== 'cli' && !!issues.length && <details className="notice">
@@ -100,42 +119,42 @@ export function Overview({ state, t, busy, submitting, kind, setKind, onError, o
       <pre>{issues.join('\n')}</pre>
     </details>}
     <div className="agent-groups">
-      {groups.map(group => <section className="agent-group" key={group.family} aria-label={toolLabels[group.family]}>
-        <header className="group-head"><span className={`family-mark mark-${group.family}`} /><h2>{toolLabels[group.family]}</h2><small>{vendors[group.family]}</small></header>
-        {group.cli.map(agent => <CliLane key={agent.name} agent={agent} t={t} disabled={disabled} open={expanded.includes(`cli:${agent.name}`)} onToggle={() => toggle(`cli:${agent.name}`)} onUpgrade={() => setCliConfirm([agent.name])} onError={onError} />)}
-        {group.apps.map(info => <AppLane key={info.id} info={info} t={t} disabled={disabled} open={expanded.includes(info.id)} onToggle={() => toggle(info.id)} onRun={() => confirmApps([info])} onError={onError} />)}
+      {groups.map(group => <section className="agent-group panel" key={group.family} aria-label={toolLabels[group.family]}>
+        <header className="group-head"><span className={`family-mark mark-${group.family}`}>{toolLabels[group.family].slice(0, 1)}</span><h2>{toolLabels[group.family]}</h2><small>{vendors[group.family]}</small></header>
+        {group.cli.map(agent => <CliLane key={agent.name} agent={agent} t={t} locked={locked} phase={active.cli.get(agent.name)} open={expanded.includes(`cli:${agent.name}`)} onToggle={() => toggle(`cli:${agent.name}`)} onUpgrade={() => setCliConfirm([agent.name])} onError={onError} />)}
+        {group.apps.map(info => <AppLane key={info.id} info={info} t={t} locked={locked} phase={active.apps.get(info.id)} open={expanded.includes(info.id)} onToggle={() => toggle(info.id)} onRun={() => confirmApps([info])} onError={onError} />)}
       </section>)}
-      {!groups.length && <div className="empty-inline">{installations.length || kind !== 'desktop' ? t.noMatch : t.desktopUnavailable}</div>}
+      {!groups.length && <div className="empty-inline panel">{installations.length || kind !== 'desktop' ? t.noMatch : t.desktopUnavailable}</div>}
     </div>
-    {cliConfirm && <CliConfirmation agents={cliAgents} t={t} submitting={submitting} disabled={disabled || cliAgents.length !== cliConfirm.length} onCancel={() => setCliConfirm(null)} onConfirm={onUpgradeCli} />}
-    {appConfirm && <AppConfirmation plans={appConfirm.plans} installations={installations} t={t} submitting={submitting} stale={appConfirm.revision !== state.revision} disabled={disabled || appConfirm.revision !== state.revision} onCancel={() => setAppConfirm(null)} onConfirm={plans => onRunDesktop(plans, appConfirm.revision)} />}
+    {cliConfirm && <CliConfirmation agents={cliAgents} t={t} submitting={submitting} disabled={locked || cliAgents.length !== cliConfirm.length} onCancel={() => setCliConfirm(null)} onConfirm={tools => onUpgradeCli(tools, () => setCliConfirm(null))} />}
+    {appConfirm && <AppConfirmation plans={appConfirm.plans} name={appName} t={t} submitting={submitting} stale={appConfirm.revision !== state.revision} disabled={locked || appConfirm.revision !== state.revision} onCancel={() => setAppConfirm(null)}
+      onConfirm={plans => onRunDesktop(plans, appConfirm.revision, appConfirm.plans.filter(plan => plans.includes(plan.id)).map(appName), () => setAppConfirm(null))} />}
   </>
 }
 
-function SummaryCard({ kind, icon, title, hint, stats, action }: {
-  kind: Kind; icon: ReactNode; title: string; hint: string; stats: (readonly [number, string])[]; action: ReactNode
-}) {
-  return <article className={`summary-card ${kind}`}>
-    <div className="summary-head"><span className="kind-icon">{icon}</span><div><h2>{title}</h2><p>{hint}</p></div></div>
-    <dl className="summary-stats">{stats.map(([count, text]) => <div key={text}><dt>{text}</dt><dd>{count}</dd></div>)}</dl>
-    {action}
-  </article>
+function Stat({ label: text, value, detail, tone }: { label: string; value: number; detail: string; tone?: Tone }) {
+  return <div className="stat"><dt>{text}</dt><dd className={value && tone ? tone : ''}>{value}</dd><small>{detail}</small></div>
 }
 
-function CliLane({ agent, t, disabled, open, onToggle, onUpgrade, onError }: {
-  agent: Agent; t: Dictionary; disabled: boolean; open: boolean; onToggle: () => void; onUpgrade: () => void; onError: (code: string) => void
+// The row action shows queue progress in place, so other rows stay usable meanwhile.
+function ActiveButton({ phase, name, t }: { phase: string; name: string; t: Dictionary }) {
+  return <button type="button" className="button small ghost" aria-label={`${label(t, phase)} ${name}`} disabled><LoaderCircle size={14} className="spin" />{label(t, phase)}</button>
+}
+
+function CliLane({ agent, t, locked, phase, open, onToggle, onUpgrade, onError }: {
+  agent: Agent; t: Dictionary; locked: boolean; phase?: string; open: boolean; onToggle: () => void; onUpgrade: () => void; onError: (code: string) => void
 }) {
-  const [text, tone] = cliStatus(agent, t)
+  const [text, tone] = phase ? [label(t, phase), 'accent' as Tone] : cliStatus(agent, t)
   const can = cliUpgradeable(agent)
   const name = `${toolLabels[agent.name]} CLI`
+  const meta = [binaries[agent.name], agent.installed ? sourceLabel(agent.install_method, t) : ''].filter(Boolean).join(' · ')
   return <div className={`lane ${agent.installed ? '' : 'not-installed'}`}>
     <div className="lane-row">
       <KindChip kind="cli" />
-      <div className="lane-name"><strong>{name}</strong><small className="mono">{binaries[agent.name]}</small></div>
-      <div className="versions mono"><span>{displayVersion(agent.version, t)}</span>{agent.upgrade_available && <><ArrowRight size={13} /><span className="warning">{agent.latest_version}</span></>}</div>
-      <div className="lane-source">{agent.installed ? sourceLabel(agent.install_method, t) : '—'}</div>
-      <div className="lane-status"><Badge tone={tone}>{text}</Badge>{agent.installed && !can && <small>{t.noAutomaticUpgrade}</small>}</div>
-      <div className="lane-action">{agent.installed && <button type="button" className={`button small ${can && agent.upgrade_available ? 'primary' : 'secondary'}`} aria-label={`${t.upgrade} ${name}`} disabled={disabled || !can} onClick={onUpgrade}><ArrowUp size={14} />{t.upgrade}</button>}</div>
+      <div className="lane-name"><strong>{name}</strong><small>{meta}</small></div>
+      <Versions current={displayVersion(agent.version, t)} latest={agent.upgrade_available ? agent.latest_version : ''} />
+      <div className="lane-status"><Badge tone={tone}>{text}</Badge>{agent.installed && !can && !phase && <small>{t.noAutomaticUpgrade}</small>}</div>
+      <div className="lane-action">{phase ? <ActiveButton phase={phase} name={name} t={t} /> : agent.installed && <button type="button" className={`button small ${agent.upgrade_available ? 'primary' : 'secondary'}`} aria-label={`${t.upgrade} ${name}`} title={upToDate(agent) ? t.upToDate : undefined} disabled={locked || !cliActionable(agent)} onClick={onUpgrade}><ArrowUp size={14} />{t.upgrade}</button>}</div>
       <Toggle open={open} name={name} t={t} onClick={onToggle} />
     </div>
     {open && <div className="lane-details"><dl>
@@ -146,6 +165,10 @@ function CliLane({ agent, t, disabled, open, onToggle, onUpgrade, onError }: {
       {agent.check_message && <><dt>{t.rawDetails}</dt><dd><code>{agent.check_message}</code></dd></>}
     </dl></div>}
   </div>
+}
+
+function Versions({ current, latest }: { current: string; latest: string }) {
+  return <div className="versions mono"><span>{current}</span>{latest && <><ArrowRight size={13} /><span className="warning">{latest}</span></>}</div>
 }
 
 function latestSourceLabel(source: string | undefined, t: Dictionary) {
@@ -159,13 +182,14 @@ function planTarget(plan: DesktopPlan) {
   return formatCommand(plan.command)
 }
 
-function AppLane({ info, t, disabled, open, onToggle, onRun, onError }: {
-  info: DesktopInstallation; t: Dictionary; disabled: boolean; open: boolean; onToggle: () => void; onRun: () => void; onError: (code: string) => void
+function AppLane({ info, t, locked, phase, open, onToggle, onRun, onError }: {
+  info: DesktopInstallation; t: Dictionary; locked: boolean; phase?: string; open: boolean; onToggle: () => void; onRun: () => void; onError: (code: string) => void
 }) {
   const [copied, setCopied] = useState(false)
-  const [text, tone] = appStatus(info, t)
+  const [text, tone] = phase ? [label(t, phase), 'accent' as Tone] : appStatus(info, t)
   const reason = info.installed && !silentReasons.includes(info.reason) ? label(t, info.reason) : info.plan?.standalone ? t.standaloneNote : ''
-  const detail = info.installed ? [label(t, info.scope), info.arch !== 'unknown' ? info.arch : ''].filter(Boolean).join(' · ') : t.appTitle
+  const meta = info.installed ? [sourceLabel(info.source, t), label(t, info.scope), info.arch !== 'unknown' ? info.arch : ''].filter(item => item && item !== '—').join(' · ') : t.appTitle
+  const disabled = locked || !info.plan || upToDate(info)
   useEffect(() => {
     if (!copied) return
     const timer = setTimeout(() => setCopied(false), 2400)
@@ -176,20 +200,21 @@ function AppLane({ info, t, disabled, open, onToggle, onRun, onError }: {
     if (!navigator.clipboard || !info.plan) { onError('copyFailed'); return }
     navigator.clipboard.writeText(formatCommand(info.plan.command)).then(() => setCopied(true)).catch(() => onError('copyFailed'))
   }
-  let action = null
-  if (info.installed) {
-    if (info.capability === 'guided') action = <button type="button" className="button small secondary" aria-label={`${t.openUpdate} ${info.name}`} disabled={disabled || !info.plan} onClick={onRun}><ExternalLink size={14} />{t.openUpdate}</button>
-    else if (info.capability === 'privileged') action = <button type="button" className="button small primary" aria-label={`${t.copyCommand} ${info.name}`} disabled={disabled || !info.plan} onClick={copyCommand}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? t.copied : t.copyCommand}</button>
-    else if (info.capability === 'interactive') action = <button type="button" className={`button small ${info.plan ? 'primary' : 'secondary'}`} aria-label={`${t.downloadInstall} ${info.name}`} disabled={disabled || !info.plan} onClick={onRun}><Download size={14} />{t.downloadInstall}</button>
-    else action = <button type="button" className={`button small ${info.plan ? 'primary' : 'secondary'}`} aria-label={`${t.upgrade} ${info.name}`} disabled={disabled || !info.plan} onClick={onRun}><ArrowUp size={14} />{t.upgrade}</button>
+  const style = info.plan && !upToDate(info) ? 'primary' : 'secondary'
+  let action: ReactNode = null
+  if (phase) action = <ActiveButton phase={phase} name={info.name} t={t} />
+  else if (info.installed) {
+    if (info.capability === 'guided') action = <button type="button" className="button small secondary" aria-label={`${t.openUpdate} ${info.name}`} disabled={disabled} onClick={onRun}><ExternalLink size={14} />{t.openUpdate}</button>
+    else if (info.capability === 'privileged') action = <button type="button" className={`button small ${style}`} aria-label={`${t.copyCommand} ${info.name}`} disabled={disabled} onClick={copyCommand}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? t.copied : t.copyCommand}</button>
+    else if (info.capability === 'interactive') action = <button type="button" className={`button small ${style}`} aria-label={`${t.downloadInstall} ${info.name}`} disabled={disabled} onClick={onRun}><Download size={14} />{t.downloadInstall}</button>
+    else action = <button type="button" className={`button small ${style}`} aria-label={`${t.upgrade} ${info.name}`} title={upToDate(info) ? t.upToDate : undefined} disabled={disabled} onClick={onRun}><ArrowUp size={14} />{t.upgrade}</button>
   }
   return <div className={`lane ${info.installed ? '' : 'not-installed'}`}>
     <div className="lane-row">
       <KindChip kind="desktop" />
-      <div className="lane-name"><strong>{info.name}</strong><small>{detail}</small></div>
-      <div className="versions mono"><span>{info.version || '—'}</span>{info.upgrade_available && <><ArrowRight size={13} /><span className="warning">{info.latest_version}</span></>}</div>
-      <div className="lane-source">{info.installed ? sourceLabel(info.source, t) : '—'}</div>
-      <div className="lane-status"><Badge tone={tone}>{text}</Badge>{copied ? <small className="accent">{t.commandCopied}</small> : reason && <small>{reason}</small>}</div>
+      <div className="lane-name"><strong>{info.name}</strong><small>{meta}</small></div>
+      <Versions current={info.version || '—'} latest={info.upgrade_available ? info.latest_version : ''} />
+      <div className="lane-status"><Badge tone={tone}>{text}</Badge>{copied ? <small className="accent">{t.commandCopied}</small> : reason && !phase && <small>{reason}</small>}</div>
       <div className="lane-action">{action}</div>
       <Toggle open={open} name={info.name} t={t} onClick={onToggle} />
     </div>
@@ -212,7 +237,7 @@ function AppLane({ info, t, disabled, open, onToggle, onRun, onError }: {
 }
 
 function Toggle({ open, name, t, onClick }: { open: boolean; name: string; t: Dictionary; onClick: () => void }) {
-  return <button type="button" className="icon-button lane-toggle" title={open ? t.collapse : t.details} aria-label={`${open ? t.collapse : t.details} ${name}`} aria-expanded={open} onClick={onClick}>{open ? <ChevronUp /> : <ChevronDown />}</button>
+  return <button type="button" className="icon-button lane-toggle" title={open ? t.collapse : t.details} aria-label={`${open ? t.collapse : t.details} ${name}`} aria-expanded={open} onClick={onClick}><ChevronDown /></button>
 }
 
 // Batch confirmation keeps every item checked by default; unchecking narrows the run.
@@ -250,8 +275,8 @@ function CliConfirmation({ agents, t, submitting, disabled, onCancel, onConfirm 
   </dialog>
 }
 
-function AppConfirmation({ plans, installations, t, submitting, disabled, stale, onCancel, onConfirm }: {
-  plans: DesktopPlan[]; installations: DesktopInstallation[]; t: Dictionary; submitting: boolean; disabled: boolean; stale: boolean
+function AppConfirmation({ plans, name, t, submitting, disabled, stale, onCancel, onConfirm }: {
+  plans: DesktopPlan[]; name: (plan: DesktopPlan) => string; t: Dictionary; submitting: boolean; disabled: boolean; stale: boolean
   onCancel: () => void; onConfirm: (plans: string[]) => void
 }) {
   const dialog = useModal()
@@ -260,7 +285,6 @@ function AppConfirmation({ plans, installations, t, submitting, disabled, stale,
   const installer = plans.some(plan => plan.action === 'installer')
   const winget = plans.some(plan => plan.channel === 'winget' || plan.channel === 'msstore')
   const note = guided ? t.desktopGuideNote : installer ? t.installerNote : winget ? t.wingetNote : t.desktopConfirmNote
-  const name = (plan: DesktopPlan) => installations.find(info => info.id === plan.installation_id)?.name || plan.product_id
   return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="desktop-confirm-title" onCancel={e => { if (submitting) e.preventDefault(); else onCancel() }}>
     <div className="modal-heading"><KindChip kind="desktop" /><h2 id="desktop-confirm-title">{t.desktopConfirm}</h2><IconButton label={t.close} disabled={submitting} onClick={onCancel}><X /></IconButton></div>
     <p>{t.desktopConfirmText}</p>

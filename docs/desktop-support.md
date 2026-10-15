@@ -41,7 +41,7 @@ Web 界面：
 agentup ui
 ```
 
-“Agent 概览”按 Agent 分组：每个 Agent 下面一行 CLI（青色 `CLI` 标签）、一行桌面 App（紫色 `App` 标签），可以切换“CLI + App / 只看 CLI / 只看 App”。顶部两张汇总卡分别显示 CLI 和桌面 App 的安装数、更新数，并提供各自的批量升级按钮；确认弹窗里可以取消勾选个别项目。桌面 App 的展开详情里有安装路径、包标识、安装范围、架构、通道、运行状态和升级计划。“升级任务”页把 CLI 任务和桌面 App 任务合在一个列表里。
+“Agent 概览”按 Agent 分组：每个 Agent 下面一行 CLI（青色 `CLI` 标签）、一行桌面 App（紫色 `App` 标签），可以切换“CLI + App / 只看 CLI / 只看 App”。顶部一条汇总显示已安装、可更新、需手动处理和进行中的数量；筛选栏右侧有“批量升级 CLI”“批量升级 App”两个按钮，确认弹窗里可以取消勾选个别项目。确认后留在当前页面，对应的行直接显示“排队中 / 正在升级”，其他行照常可以点升级；已确认是最新版的行，升级按钮置灰。桌面 App 的展开详情里有安装路径、包标识、安装范围、架构、通道、运行状态和升级计划。“升级任务”页把 CLI 任务和桌面 App 任务合在一个列表里。
 
 ## 2. 现在每个格子能做什么
 
@@ -54,13 +54,7 @@ agentup ui
 | OpenCode | 读主程序架构；v2：官方清单 + **交互安装**；v1：WinGet **自动** | 同上，Cask `opencode-desktop` | DEB/RPM；官方清单查最新版本；引导 |
 | Antigravity | 只认 2.x；ProductCode + WinGet 核对；**自动** | 同上，Cask `antigravity`，只认 2.x | 固定目录或 `.desktop` 启动项找解压目录；引导 |
 
-**升级渠道开关**：上表里加粗的升级方式中，默认开启的是 macOS Homebrew Cask 和 Windows WinGet Antigravity（2026-10-15 真机验收通过，2.18.1 → 2.23.1）。其他的 `winget`、`installer`、`apt`、`dnf` 格子在真机验收前默认关闭，关闭时照常显示检测结果和最新版本，但按钮是“去官方更新”，原因写“还没完成真机验收”。验收时用环境变量临时打开：
-
-```text
-AGENTUP_DESKTOP_CHANNELS=winget,installer agentup ui
-AGENTUP_DESKTOP_CHANNELS=apt agentup upgrade codex --kind desktop --yes
-AGENTUP_DESKTOP_CHANNELS=winget/codex.desktop agentup upgrade codex --kind desktop --yes
-```
+**升级渠道**：上表里加粗的升级方式全部默认开启（2026-10-15 起取消了“真机验收前默认关闭”的开关，`AGENTUP_DESKTOP_CHANNELS` 不再需要）。已真机验收的是 Windows WinGet Antigravity（2.18.1 → 2.23.1），其他格子目前只有模拟测试，遇到问题按任务里的原始输出排查。
 
 各渠道的关键规则：
 
@@ -98,7 +92,7 @@ Homebrew 的认领规则：
 
 - 浏览器只提交后端生成的计划 ID 和状态版本号。
 - 后端重新扫描并重新生成计划，身份、版本、来源、架构、通道或命令变了就拒绝。
-- 桌面 App 和 CLI 共用跨进程修改锁；Web 界面同一时间只允许一个修改任务。
+- 桌面 App 和 CLI 共用跨进程修改锁。Web 界面可以连续确认多个升级，它们进入同一个队列，按确认顺序一个接一个执行，不会同时跑两个包管理器；同一项已在队列里时不能重复加入。
 - 批量任务串行执行，同一个包管理器不并发。
 - 离线、计划无效、计划重复、状态过期、来源不明时都不执行。
 - 不关厂商自带更新，不锁版本，不自动提权、强杀、重启或回滚。

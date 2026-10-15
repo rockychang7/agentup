@@ -28,7 +28,7 @@ export interface Result {
 }
 export interface Task {
   id: string
-  status: 'running' | 'completed' | 'failed'
+  status: 'queued' | 'running' | 'completed' | 'failed'
   started_at: string
   finished_at?: string
   tools: { name: ToolName; phase: Phase; result?: Result }[]
@@ -49,7 +49,7 @@ export interface State {
   doctor: Doctor | null
   scanning: boolean
   diagnosing: boolean
-  active_task: string
+  active_tasks: string[]
   offline: boolean
   revision: number
   desktop?: DesktopSnapshot
@@ -118,7 +118,7 @@ export interface DesktopResult {
 }
 export interface DesktopTask {
   id: string
-  status: 'running' | 'completed' | 'failed' | 'handed_off'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'handed_off'
   started_at: string
   finished_at?: string
   items: { installation_id: string; name: string; phase: DesktopPhase; result?: DesktopResult }[]

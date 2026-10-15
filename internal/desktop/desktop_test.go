@@ -38,7 +38,7 @@ func isolated(t *testing.T, m *Manager) *Manager {
 		return "", errors.New("network is disabled in tests")
 	}
 	m.receiptDir, m.cacheDir, m.procRoot = t.TempDir(), t.TempDir(), t.TempDir()
-	m.desktopDir, m.channels = nil, map[string]bool{"brew-cask": true}
+	m.desktopDir = nil
 	m.poll, m.verifyWindow = time.Millisecond, 50*time.Millisecond
 	return m
 }
@@ -304,7 +304,7 @@ func TestExecutionRejectsChangesAfterConfirmation(t *testing.T) {
 	}
 }
 
-func TestDebDiscoveryRequiresDesktopEvidenceAndStaysGuided(t *testing.T) {
+func TestDebDiscoveryRequiresDesktopEvidence(t *testing.T) {
 	mr := runner.NewMockRunner()
 	mr.SetLookPath("dpkg-query", "dpkg-query", nil)
 	mr.SetLookPath("apt-cache", "apt-cache", nil)
@@ -317,8 +317,8 @@ func TestDebDiscoveryRequiresDesktopEvidenceAndStaysGuided(t *testing.T) {
 	m := isolated(t, New(context.Background(), mr, "Linux", "amd64"))
 	m.home = t.TempDir()
 	info := productInstallation(t, m.Scan(false), "codex.desktop")
-	if info.Capability != Guided || !info.UpgradeAvailable || info.Version != "26.1007.1-1" ||
-		info.Plan == nil || info.Plan.Action != "guide" {
+	if info.Capability != Privileged || !info.UpgradeAvailable || info.Version != "26.1007.1-1" ||
+		info.Plan == nil || info.Plan.Action != ActionPrivileged {
 		t.Fatalf("Debian channel was incorrectly classified: %+v", info)
 	}
 	mr.SetResult("env", []string{"LC_ALL=C", "apt-cache", "policy", "chatgpt"}, runner.MockResult{Stdout: "chatgpt:\n  Candidate: 26.1007.1-2\n"})

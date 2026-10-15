@@ -250,7 +250,6 @@ func candidate(info *Installation, version string) {
 // planSpec is how a platform scanner says an installation could be updated.
 // Scan applies process checks and channel acceptance before turning it into a Plan.
 type planSpec struct {
-	channel string // acceptance key, see channelEnabled
 	command []string
 	asset   *Asset
 	// unknownOK lets the channel itself decide whether an update applies,

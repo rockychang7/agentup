@@ -37,19 +37,11 @@
 | --- | --- | --- |
 | 0 | ✅ 完成 | 文档合并；界面改版；数据模型加了 `interactive`、`privileged`、`no_update`、`cancelled`、版本来源、需单独确认、安装包信息 |
 | 1 | ✅ 代码完成 | 三个平台的检测补全（见各阶段的 ✅ 标记）。Windows 本机只读实测通过；macOS、Linux 只有模拟测试 |
-| 2 | ✅ 代码完成 | WinGet（Codex、Antigravity、OpenCode 1.x）、APT/DNF 授权命令。默认关闭，等真机验收 |
-| 3 | ✅ 代码完成 | OpenCode Windows v2 官方安装包流程。默认关闭，等真机验收 |
-| 4 | 进行中 | 已验收：Windows WinGet Antigravity（见附录 C）。其余格子要在真机上做真实升级，通过后加入默认开启名单 |
+| 2 | ✅ 代码完成 | WinGet（Codex、Antigravity、OpenCode 1.x）、APT/DNF 授权命令。默认开启 |
+| 3 | ✅ 代码完成 | OpenCode Windows v2 官方安装包流程。默认开启 |
+| 4 | 进行中 | 已验收：Windows WinGet Antigravity（见附录 C）。其余格子已默认开启，仍需在真机上做真实升级验证 |
 
-**升级渠道开关**：开关按“渠道”或“渠道/产品”设置。默认开启的只有 Homebrew Cask 和已验收的 `winget/antigravity.desktop`；其他的 `winget`、`apt`、`dnf`、`installer` 格子默认关闭。关闭时这些格子仍然显示检测结果和最新版本，但升级方式是“引导更新”，原因写“还没完成真机验收”。验收时用环境变量临时打开，例如：
-
-```text
-AGENTUP_DESKTOP_CHANNELS=winget,installer agentup ui
-AGENTUP_DESKTOP_CHANNELS=apt agentup upgrade codex --kind desktop --yes
-AGENTUP_DESKTOP_CHANNELS=winget/codex.desktop agentup upgrade codex --kind desktop --yes
-```
-
-某个格子在真机上验收通过后，把它加进代码里的默认开启名单（`internal/desktop/manager.go` 的 `verifiedChannels`）。
+**升级渠道**：2026-10-15 起所有渠道（`brew-cask`、`winget`、`installer`、`apt`、`dnf`）默认开启，取消了按渠道的验收开关和 `AGENTUP_DESKTOP_CHANNELS` 环境变量。安全检查（身份、版本、来源、架构、退出状态、计划核对）不变。
 
 ## 1. 管理范围
 
@@ -347,7 +339,7 @@ Linux 授权命令规则：
 
 并发：
 
-- CLI 和 Web 界面共用跨进程修改锁，同一时间只有一个修改任务。
+- CLI 和 Web 界面共用跨进程修改锁。Web 界面里确认的任务排成一个队列，按顺序逐个执行，同一时间只有一个在跑。
 - 同一个包管理器串行执行。
 - AgentUp 管不了厂商自带的更新器，所以执行前后都重新核对。发现 App 已被自带更新器升级，就放弃旧计划。
 
@@ -400,11 +392,11 @@ Agent 概览                                         [离线只读] [刷新状�
 ```
 
 - **按 Agent 分组**：每组里 CLI 一行、桌面 App 一行（多份安装就多行）。同一个 Agent 的两种形态放在一起看。
-- **类型有固定颜色**：CLI 用青色 `>_ CLI`，桌面 App 用紫色 `▭ App`。顶部两张汇总卡也用同样的颜色。
+- **类型有固定颜色**：CLI 用青色 `>_ CLI`，桌面 App 用紫色 `▭ App`。顶部汇总改成一条四格统计（已安装、可更新、需手动处理、进行中）。
 - **两层筛选长得不一样**：类型用实心分段按钮，状态用小号文字标签，不再出现两个“全部”。
 - **按钮带文字**：CLI 显示“升级”；桌面 App 按等级显示“升级”“下载并安装”“复制命令”“去官方更新”；不能操作时，状态下面写原因（比如“请先退出 App”）。
 - **来源说人话**：npm、Homebrew、MSIX、安装程序、直接安装、APT、RPM、解压版；内部代码（如 `app-bundle`）只在展开详情里显示。
-- **批量升级放到汇总卡上**：CLI 和 App 各一个按钮。确认弹窗里可以取消勾选个别项目。行上不再放复选框。
+- **批量升级放在筛选栏右侧**：CLI 和 App 各一个按钮。确认弹窗里可以取消勾选个别项目。行上不再放复选框。
 - **任务页合并**：CLI 任务和桌面 App 任务在同一个列表里，按时间排，每条带 CLI / App 标签。
 - 后续阶段新增的状态（等待退出、下载中、待验证……）显示在对应行的状态列和任务详情里。
 

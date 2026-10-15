@@ -70,7 +70,7 @@ function channelFixture(linux) {
 function newSession(key) {
   const state = {
     version: '0.6.0-dev', os: 'Windows', arch: 'amd64', offline: false,
-    revision: 1, scanning: false, diagnosing: false, active_task: '', tasks: [], doctor: null,
+    revision: 1, scanning: false, diagnosing: false, active_tasks: [], tasks: [], doctor: null,
     agents: labels.map((name, i) => ({
       name, installed: i !== 2, version: i === 0 ? '1.2.0' : i === 1 ? '2.1.0' : i === 3 ? '0.3.5' : '',
       latest_version: i === 0 ? '1.3.0' : i === 1 ? '2.2.0' : '',
@@ -102,8 +102,9 @@ function newSession(key) {
   }
   return { state, streams: new Set(), stopped: false }
 }
-function broadcast(session) {
-  session.state.revision++
+// Like the service, only data a confirmation shows moves the revision; task progress does not.
+function broadcast(session, changed = true) {
+  if (changed) session.state.revision++
   for (const stream of session.streams) stream.write(`event: state\ndata: ${JSON.stringify(session.state)}\n\n`)
 }
 function json(response, code, body) {
@@ -139,7 +140,7 @@ const handle = async (req, res) => {
     if (!session) return json(res, 401, { error: 'unauthorized' })
     const { state } = session
     if (url.pathname === '/api/shutdown') {
-      if (state.active_task && !body.force) return json(res, 409, { error: 'busy' })
+      if (state.active_tasks.length && !body.force) return json(res, 409, { error: 'busy' })
       session.stopped = true
       json(res, 202, { ok: true })
       for (const stream of session.streams) {
@@ -186,8 +187,8 @@ const handle = async (req, res) => {
     }
     if (url.pathname === '/api/upgrades') {
       if (state.offline) return json(res, 400, { error: 'offline_read_only' })
-      if (state.active_task) return json(res, 409, { error: 'busy' })
       if (body.revision !== state.revision) return json(res, 409, { error: 'stale_preview' })
+      if (state.tasks.some(task => state.active_tasks.includes(task.id) && task.tools.some(tool => body.tools.includes(tool.name)))) return json(res, 409, { error: 'busy' })
       const id = `${Date.now()}-test`
       const task = {
         id, status: 'running', started_at: new Date().toISOString(),
@@ -195,8 +196,8 @@ const handle = async (req, res) => {
         logs: [{ name: body.tools[0], stream: 'stdout', text: 'Resolving packages...\n' }], log_truncated: false,
       }
       state.tasks.push(task)
-      state.active_task = id
-      broadcast(session)
+      state.active_tasks.push(id)
+      broadcast(session, false)
       setTimeout(() => {
         task.status = key.includes('failure') ? 'failed' : 'completed'
         task.finished_at = new Date().toISOString()
@@ -207,20 +208,20 @@ const handle = async (req, res) => {
           item.result = { name: item.name, status: task.status === 'failed' ? 'failed' : 'success', outcome: task.status === 'failed' ? 'failed' : 'updated', old_version: agent.version, new_version: task.status === 'failed' ? '' : agent.latest_version, duration_ms: 1200, command: agent.command, ...(task.status === 'failed' ? { message: 'EACCES: permission denied' } : {}) }
           if (task.status !== 'failed') { agent.version = agent.latest_version; agent.upgrade_available = false }
         })
-        state.active_task = ''
+        state.active_tasks = state.active_tasks.filter(active => active !== id)
         broadcast(session)
       }, 1200)
       return json(res, 202, { id })
     }
     if (url.pathname === '/api/desktop/upgrades') {
       if (state.offline) return json(res, 400, { error: 'offline_read_only' })
-      if (state.active_task) return json(res, 409, { error: 'busy' })
       if (body.revision !== state.revision) return json(res, 409, { error: 'stale_preview' })
       if (!body.plans?.length || body.command || body.url) return json(res, 400, { error: 'invalid_request' })
       const installations = body.plans.map(id => state.desktop.installations.find(info => info.plan?.id === id))
       if (installations.some(info => !info)) return json(res, 409, { error: 'stale_preview' })
       if (installations.length > 1 && installations.some(info => info.capability !== 'automatic' || info.plan.standalone)) return json(res, 400, { error: 'unsupported_upgrade' })
       if (installations.some(info => info.capability === 'privileged')) return json(res, 400, { error: 'unsupported_upgrade' })
+      if (state.desktop_tasks.some(task => state.active_tasks.includes(task.id) && task.items.some(item => installations.some(info => info.id === item.installation_id)))) return json(res, 409, { error: 'busy' })
       const id = `${Date.now()}-desktop-test`
       const task = {
         id, status: 'running', started_at: new Date().toISOString(),
@@ -228,8 +229,8 @@ const handle = async (req, res) => {
         logs: [], log_truncated: false,
       }
       state.desktop_tasks.push(task)
-      state.active_task = id
-      broadcast(session)
+      state.active_tasks.push(id)
+      broadcast(session, false)
       setTimeout(() => {
         task.status = installations.some(info => info.plan.action === 'guide') ? 'handed_off' : 'completed'
         task.finished_at = new Date().toISOString()
@@ -251,7 +252,7 @@ const handle = async (req, res) => {
             delete info.plan
           }
         })
-        state.active_task = ''
+        state.active_tasks = state.active_tasks.filter(active => active !== id)
         broadcast(session)
       }, 1200)
       return json(res, 202, { id })

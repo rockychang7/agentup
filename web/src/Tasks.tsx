@@ -8,7 +8,7 @@ import type { Kind, Tone } from './ui'
 
 type Entry = { kind: 'cli'; id: string; started: string; task: Task } | { kind: 'desktop'; id: string; started: string; task: DesktopTask }
 
-const statusTone: Record<string, Tone> = { completed: 'good', failed: 'bad', handed_off: 'warning', running: 'accent' }
+const statusTone: Record<string, Tone> = { completed: 'good', failed: 'bad', handed_off: 'warning', running: 'accent', queued: 'muted' }
 const outcomeTone = (outcome?: string): Tone => !outcome ? 'accent'
   : outcome === 'failed' || outcome === 'unverified' ? 'bad'
     : outcome === 'updated' || outcome === 'no_update' ? 'good' : outcome === 'handed_off' ? 'warning' : 'muted'
@@ -30,9 +30,9 @@ export function TaskCenter({ tasks, desktopTasks, t, language, onError }: {
     ...desktopTasks.map(task => ({ kind: 'desktop' as const, id: task.id, started: task.started_at, task })),
   ].sort((a, b) => Date.parse(b.started) - Date.parse(a.started))
   const entry = entries.find(item => item.id === selected) || entries[0]
-  if (!entry) return <div className="empty-state"><ListChecks size={34} /><h2>{t.noTasks}</h2></div>
+  if (!entry) return <div className="empty-state panel"><ListChecks size={32} /><h2>{t.noTasks}</h2><p>{t.noTasksHint}</p></div>
   const names = (item: Entry) => item.kind === 'cli' ? item.task.tools.map(tool => toolLabels[tool.name]).join(', ') : item.task.items.map(app => app.name).join(', ')
-  return <div className="task-layout">
+  return <div className="task-layout panel">
     <section className="task-history"><h2>{t.sessionHistory}<span>{entries.length}</span></h2>{entries.map(item => <button type="button" key={item.id} aria-pressed={item.id === entry.id} className={`history-item ${item.id === entry.id ? 'active' : ''}`} onClick={() => setSelected(item.id)}>
       <span className="history-title"><KindChip kind={item.kind} /><span>{names(item)}</span></span>
       <small>{taskDate(item.started, language)}</small>

@@ -201,7 +201,7 @@ func (m *Manager) vendorCheck(info *Installation, file string) {
 		}
 		asset.Publisher = openCodePublisher
 		info.Capability, info.Reason, info.Channel = Interactive, "", "official"
-		info.spec = planSpec{channel: "installer", asset: &asset}
+		info.spec = planSpec{asset: &asset}
 		return
 	}
 	info.Reason = "architecture_unverified"

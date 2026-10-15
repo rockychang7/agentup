@@ -55,7 +55,7 @@ agentup upgrade --kind desktop --yes        # 仅批量执行可自动升级项
 
 支持检测 ChatGPT/Codex Desktop、Claude Desktop、OpenCode Desktop、Antigravity app。**不管理 Antigravity IDE**，不接管旧版 1.x IDE，不切换安装来源或执行产品迁移。
 
-默认对身份、来源、路径、版本线、架构和退出状态均可确认的 macOS Homebrew Cask，以及已真机验收的 Windows WinGet Antigravity 自动执行升级。其他 WinGet 应用、OpenCode 官方安装包、Linux APT/DNF 授权命令已实现，但在真机验收前默认关闭，可用 `AGENTUP_DESKTOP_CHANNELS=winget,installer,apt,dnf` 临时开启；关闭时提供官方入口引导，结果为 `handed_off`，不是升级成功。详见 [当前支持范围](docs/desktop-support.md)。
+macOS Homebrew Cask、Windows WinGet、OpenCode 官方安装包和 Linux APT/DNF 授权命令全部默认开启：身份、来源、路径、版本线、架构和退出状态都能确认时就按对应方式升级，确认不了时才转为官方入口引导（结果为 `handed_off`，不是升级成功）。详见 [当前支持范围](docs/desktop-support.md)。
 
 多份桌面安装需要通过 `--instance <ID>` 明确目标。Desktop 命令不带 `--yes` 只展示计划，离线模式不执行操作。Web UI 按 Agent 分组，同时列出 CLI 与桌面 App，并用不同颜色的类型标签区分；CLI 与桌面 App 分别确认和执行。三平台的完整方案与实施顺序见 [桌面 App 检测与升级方案](docs/desktop-upgrade-plan.md)。
 

@@ -14,23 +14,6 @@ import (
 	"agentup/internal/runner"
 )
 
-// verifiedChannels have passed real-machine acceptance and are enabled by default.
-// A key is a whole channel ("brew-cask") or one channel for one product
-// ("winget/antigravity.desktop"). Others stay guided unless listed in AGENTUP_DESKTOP_CHANNELS.
-var verifiedChannels = map[string]bool{
-	"brew-cask": true,
-	// Accepted 2026-10-15 on Windows 10 x64: 2.18.1 -> 2.23.1, then no_update (0x8A15002B).
-	"winget/antigravity.desktop": true,
-}
-
-// ChannelsEnv lists extra execution channels (winget, apt, dnf, installer), or
-// channel/product pairs such as winget/codex.desktop, to enable for acceptance testing.
-const ChannelsEnv = "AGENTUP_DESKTOP_CHANNELS"
-
-func (m *Manager) channelEnabled(channel, product string) bool {
-	return channel != "" && (m.channels[channel] || m.channels[channel+"/"+product])
-}
-
 type Manager struct {
 	ctx     context.Context
 	runner  runner.Runner
@@ -46,7 +29,6 @@ type Manager struct {
 	desktopDir []string
 	receiptDir string
 	cacheDir   string
-	channels   map[string]bool
 	terminal   bool
 	poll       time.Duration
 	// verifyWindow bounds how long a finished installer is polled for a new version.
@@ -68,22 +50,13 @@ func New(ctx context.Context, r runner.Runner, osName, arch string) *Manager {
 	}
 	config, _ := os.UserConfigDir()
 	cache, _ := os.UserCacheDir()
-	channels := map[string]bool{}
-	for key, enabled := range verifiedChannels {
-		channels[key] = enabled
-	}
-	for _, key := range strings.Split(os.Getenv(ChannelsEnv), ",") {
-		if key = strings.TrimSpace(key); key != "" {
-			channels[key] = true
-		}
-	}
 	return &Manager{
 		ctx: ctx, runner: r, os: osName, arch: arch, home: home,
 		fetch: fetchMetadata, download: downloadAsset, procRoot: "/proc",
 		desktopDir: []string{filepath.Join(home, ".local", "share", "applications"), "/usr/share/applications"},
 		receiptDir: filepath.Join(config, "agentup", "desktop-receipts"),
 		cacheDir:   filepath.Join(cache, "agentup", "desktop-downloads"),
-		channels:   channels, poll: 3 * time.Second, verifyWindow: 2 * time.Minute,
+		poll:       3 * time.Second, verifyWindow: 2 * time.Minute,
 	}
 }
 
@@ -150,9 +123,6 @@ func (m *Manager) finalize(info *Installation, offline bool) {
 	}
 	if info.LatestCheck == model.CheckOffline {
 		info.LatestCheck = model.CheckUnavailable
-	}
-	if executable(info.Capability) && !m.channelEnabled(info.spec.channel, info.ProductID) {
-		info.Capability, info.Reason = Guided, "channel_unverified"
 	}
 	if executable(info.Capability) {
 		switch info.Running {

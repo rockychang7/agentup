@@ -122,7 +122,7 @@ func TestSelectionValidationAndCompletedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := waitState(t, s, func(state State) bool { return state.ActiveTask == "" && !state.Scanning && len(state.Tasks) > 0 })
+	state := waitState(t, s, func(state State) bool { return len(state.ActiveTasks) == 0 && !state.Scanning && len(state.Tasks) > 0 })
 	task := state.Tasks[0]
 	if task.ID != id || task.Status != "completed" || task.Tools[0].Result.Outcome != model.OutcomeUnchanged {
 		t.Fatalf("invalid result: %+v", task)
@@ -145,7 +145,7 @@ func TestFailureDoesNotLeaveServiceBusy(t *testing.T) {
 	if _, err := s.Upgrade([]model.ToolName{model.ToolAgy}, scanned.Revision); err != nil {
 		t.Fatal(err)
 	}
-	state := waitState(t, s, func(state State) bool { return state.ActiveTask == "" && !state.Scanning && len(state.Tasks) > 0 })
+	state := waitState(t, s, func(state State) bool { return len(state.ActiveTasks) == 0 && !state.Scanning && len(state.Tasks) > 0 })
 	if state.Tasks[0].Status != "failed" {
 		t.Fatal(state.Tasks[0].Status)
 	}
@@ -228,7 +228,7 @@ func TestBusyGuardsDuringScanAndUpgrade(t *testing.T) {
 				t.Fatal("upgrade bypassed busy state", err)
 			}
 			resume()
-			waitState(t, s, func(state State) bool { return !state.Scanning && state.ActiveTask == "" })
+			waitState(t, s, func(state State) bool { return !state.Scanning && len(state.ActiveTasks) == 0 })
 		})
 	}
 }
@@ -246,7 +246,7 @@ func TestHistoryAndOutputRemainBounded(t *testing.T) {
 		if _, err := s.Upgrade([]model.ToolName{model.ToolAgy}, s.Snapshot().Revision); err != nil {
 			t.Fatal(err)
 		}
-		waitState(t, s, func(state State) bool { return !state.Scanning && state.ActiveTask == "" })
+		waitState(t, s, func(state State) bool { return !state.Scanning && len(state.ActiveTasks) == 0 })
 	}
 	state := s.Snapshot()
 	if len(state.Tasks) != 20 || len(changes) != 1 {
@@ -268,7 +268,7 @@ func TestInstallationChangeStopsBeforeMutation(t *testing.T) {
 	if _, err := s.Upgrade([]model.ToolName{model.ToolAgy}, state.Revision); err != nil {
 		t.Fatal(err)
 	}
-	state = waitState(t, s, func(state State) bool { return !state.Scanning && state.ActiveTask == "" })
+	state = waitState(t, s, func(state State) bool { return !state.Scanning && len(state.ActiveTasks) == 0 })
 	if state.Tasks[0].Status != "failed" {
 		t.Fatal("changed installation was accepted")
 	}
@@ -319,5 +319,5 @@ func TestMultipleServicesSerializeUpgradesAndProtectActiveTaskOnStop(t *testing.
 	if _, err := other.Upgrade([]model.ToolName{model.ToolAgy}, other.Snapshot().Revision); err != nil {
 		t.Fatal("stopped instance retained the mutation lock", err)
 	}
-	waitState(t, other, func(state State) bool { return !state.Scanning && state.ActiveTask == "" })
+	waitState(t, other, func(state State) bool { return !state.Scanning && len(state.ActiveTasks) == 0 })
 }

@@ -151,7 +151,7 @@ func (m *Manager) aptCandidate(info *Installation, pkg string) {
 	info.LatestCheck, info.UpgradeAvailable = model.CheckOK, cmp < 0
 	if info.UpgradeAvailable {
 		info.Capability, info.Reason = Privileged, ""
-		info.spec = planSpec{channel: "apt", command: []string{"sudo", "apt-get", "install", "--only-upgrade", pkg}}
+		info.spec = planSpec{command: []string{"sudo", "apt-get", "install", "--only-upgrade", pkg}}
 	}
 }
 
@@ -226,7 +226,7 @@ func (m *Manager) dnfCandidate(info *Installation, pkg string) {
 	info.UpgradeAvailable = rpmCompare(info.Version, latest) < 0
 	if info.UpgradeAvailable {
 		info.Capability, info.Reason = Privileged, ""
-		info.spec = planSpec{channel: "dnf", command: []string{"sudo", "dnf", "upgrade", pkg}}
+		info.spec = planSpec{command: []string{"sudo", "dnf", "upgrade", pkg}}
 	}
 }
 

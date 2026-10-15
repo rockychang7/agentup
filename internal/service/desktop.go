@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"agentup/internal/desktop"
-	"agentup/internal/operation"
 )
 
 type desktopBackend interface {
@@ -60,7 +59,7 @@ func (s *Service) UpgradeDesktops(planIDs []string, revision uint64) (string, er
 	}
 	plans := []desktop.Plan{}
 	task := DesktopTask{
-		ID:     fmt.Sprintf("desktop-%d-%d", time.Now().UnixMilli(), revision),
+		ID:     fmt.Sprintf("desktop-%d-%d", time.Now().UnixNano(), revision),
 		Status: "running", StartedAt: time.Now(),
 		Items: []DesktopTaskItem{}, Logs: []DesktopLog{},
 	}
@@ -87,84 +86,96 @@ func (s *Service) UpgradeDesktops(planIDs []string, revision uint64) (string, er
 			return "", ErrStale
 		}
 	}
-	release, err := operation.Acquire("mutation")
-	if err != nil {
-		return "", ErrBusy
+	for _, plan := range plans {
+		if s.activeLocked(plan.Installation) {
+			return "", ErrBusy
+		}
 	}
-	if len(s.state.DesktopTasks) >= 20 {
-		s.state.DesktopTasks = s.state.DesktopTasks[1:]
+	task.Status = "queued"
+	if err := s.enqueueLocked(task.ID, func() { s.runDesktopUpgrade(task.ID, plans) }); err != nil {
+		return "", err
 	}
+	s.state.DesktopTasks = trimHistory(s.state.DesktopTasks, func(t DesktopTask) string { return t.ID }, s.isActiveLocked)
 	s.state.DesktopTasks = append(s.state.DesktopTasks, task)
-	s.state.ActiveTask = task.ID
 	s.changedLocked()
-	s.wg.Add(1)
-	go s.runDesktopUpgrade(plans, release)
 	return task.ID, nil
 }
 
-func (s *Service) runDesktopUpgrade(plans []desktop.Plan, release func()) {
-	defer s.wg.Done()
-	defer release()
-	for index, plan := range plans {
+func (s *Service) desktopTaskLocked(id string) *DesktopTask {
+	for i := range s.state.DesktopTasks {
+		if s.state.DesktopTasks[i].ID == id {
+			return &s.state.DesktopTasks[i]
+		}
+	}
+	return nil
+}
+
+func (s *Service) runDesktopUpgrade(id string, plans []desktop.Plan) {
+	// update edits the task if it is still in history; trimming never removes active tasks.
+	update := func(change func(*DesktopTask)) {
 		s.mu.Lock()
-		task := &s.state.DesktopTasks[len(s.state.DesktopTasks)-1]
-		task.Items[index].Phase = "upgrading"
-		s.changedLocked()
-		s.mu.Unlock()
-		result := s.desktopManager.Execute(plan, func(stream, text string) {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			task := &s.state.DesktopTasks[len(s.state.DesktopTasks)-1]
-			if stream == "phase" {
-				task.Items[index].Phase = text
-				s.changedLocked()
-				return
-			}
-			text = clean(text)
-			if len(text) > 16<<10 {
-				task.LogTruncated = true
-			}
-			task.Logs = append(task.Logs, DesktopLog{
-				Installation: plan.Installation, Stream: stream, Text: tail(text, 16<<10),
-			})
-			total, first := 0, len(task.Logs)
-			for first > 0 && total+len(task.Logs[first-1].Text) <= 128<<10 && len(task.Logs)-first < 1000 {
-				first--
-				total += len(task.Logs[first].Text)
-			}
-			if first > 0 {
-				task.Logs = append([]DesktopLog{}, task.Logs[first:]...)
-				task.LogTruncated = true
-			}
+		defer s.mu.Unlock()
+		if task := s.desktopTaskLocked(id); task != nil {
+			change(task)
 			s.changedLocked()
+		}
+	}
+	update(func(task *DesktopTask) { task.Status, task.StartedAt = "running", time.Now() })
+	for index, plan := range plans {
+		update(func(task *DesktopTask) { task.Items[index].Phase = "upgrading" })
+		result := s.desktopManager.Execute(plan, func(stream, text string) {
+			update(func(task *DesktopTask) {
+				if stream == "phase" {
+					task.Items[index].Phase = text
+					return
+				}
+				text = clean(text)
+				if len(text) > 16<<10 {
+					task.LogTruncated = true
+				}
+				task.Logs = append(task.Logs, DesktopLog{
+					Installation: plan.Installation, Stream: stream, Text: tail(text, 16<<10),
+				})
+				total, first := 0, len(task.Logs)
+				for first > 0 && total+len(task.Logs[first-1].Text) <= 128<<10 && len(task.Logs)-first < 1000 {
+					first--
+					total += len(task.Logs[first].Text)
+				}
+				if first > 0 {
+					task.Logs = append([]DesktopLog{}, task.Logs[first:]...)
+					task.LogTruncated = true
+				}
+			})
 		})
 		result.Message = tail(clean(result.Message), 8<<10)
+		update(func(task *DesktopTask) { task.Items[index].Phase, task.Items[index].Result = "finished", &result })
+	}
+	update(func(task *DesktopTask) {
+		task.Status = "completed"
+		finished := time.Now()
+		task.FinishedAt = &finished
+		for _, item := range task.Items {
+			if item.Result == nil || item.Result.Outcome == "failed" || item.Result.Outcome == "unverified" {
+				task.Status = "failed"
+				break
+			}
+			if item.Result.Outcome == "handed_off" {
+				task.Status = "handed_off"
+			}
+		}
+	})
+	s.mu.Lock()
+	offline := s.state.Offline
+	s.mu.Unlock()
+	// Desktop discovery replaces only the desktop snapshot; CLI rows are untouched.
+	if s.ctx.Err() == nil {
+		snapshot := s.desktopManager.Scan(offline)
 		s.mu.Lock()
-		task = &s.state.DesktopTasks[len(s.state.DesktopTasks)-1]
-		task.Items[index].Phase, task.Items[index].Result = "finished", &result
+		s.state.Desktop = snapshot
 		s.changedLocked()
 		s.mu.Unlock()
 	}
 	s.mu.Lock()
-	task := &s.state.DesktopTasks[len(s.state.DesktopTasks)-1]
-	task.Status = "completed"
-	finished := time.Now()
-	task.FinishedAt = &finished
-	for _, item := range task.Items {
-		if item.Result == nil || item.Result.Outcome == "failed" || item.Result.Outcome == "unverified" {
-			task.Status = "failed"
-			break
-		}
-		if item.Result.Outcome == "handed_off" {
-			task.Status = "handed_off"
-		}
-	}
-	s.state.ActiveTask = ""
-	scan, offline := s.ctx.Err() == nil, s.state.Offline
-	s.state.Scanning = scan
-	s.changedLocked()
+	s.finishLocked(id)
 	s.mu.Unlock()
-	if scan {
-		s.scan(offline)
-	}
 }

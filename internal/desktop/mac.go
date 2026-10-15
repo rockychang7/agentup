@@ -131,7 +131,7 @@ func (m *Manager) scanMac(snapshot *Snapshot, offline bool) {
 					}
 					info.LatestSource = LatestBrewCask
 					candidate(&info, strings.Split(cask.Version, ",")[0])
-					info.spec = planSpec{channel: "brew-cask", command: []string{brew, "upgrade", "--cask", product.Cask}}
+					info.spec = planSpec{command: []string{brew, "upgrade", "--cask", product.Cask}}
 				}
 				if info.Source == "app-bundle" && !offline {
 					m.caskReference(&info, product.Cask)

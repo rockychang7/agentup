@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -68,7 +70,7 @@ type State struct {
 	Doctor       *model.DoctorResult `json:"doctor"`
 	Scanning     bool                `json:"scanning"`
 	Diagnosing   bool                `json:"diagnosing"`
-	ActiveTask   string              `json:"active_task"`
+	ActiveTasks  []string            `json:"active_tasks"` // queued and running, in execution order
 	Offline      bool                `json:"offline"`
 	Revision     uint64              `json:"revision"`
 	Desktop      desktop.Snapshot    `json:"desktop"`
@@ -86,6 +88,12 @@ type Service struct {
 	state          State
 	subs           map[chan struct{}]struct{}
 	desktopManager desktopBackend
+	// fingerprint covers what a confirmation shows; Revision only moves when it changes.
+	fingerprint [32]byte
+	// queue runs confirmed tasks one at a time so package managers never overlap.
+	queue   []func()
+	working bool
+	release func()
 }
 
 func New(ctx context.Context, version, arch string, r runner.Runner, p platform.Platform, tools []config.ToolConfig) *Service {
@@ -95,7 +103,7 @@ func New(ctx context.Context, version, arch string, r runner.Runner, p platform.
 	}
 	s := &Service{ctx: ctx, cancel: cancel, r: r, p: p, tools: tools, subs: make(map[chan struct{}]struct{}),
 		desktopManager: desktop.New(ctx, r, p.Name(), arch)}
-	s.state = State{Version: version, OS: p.Name(), Arch: arch, Agents: []Agent{}, Tasks: []Task{}}
+	s.state = State{Version: version, OS: p.Name(), Arch: arch, Agents: []Agent{}, Tasks: []Task{}, ActiveTasks: []string{}}
 	s.state.Desktop = desktop.Snapshot{Installations: []desktop.Installation{}, Issues: []string{}}
 	s.state.DesktopTasks = []DesktopTask{}
 	for _, tool := range tools {
@@ -113,7 +121,7 @@ func (s *Service) Close() {
 func (s *Service) Stop(force bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state.ActiveTask != "" && !force {
+	if len(s.state.ActiveTasks) != 0 && !force {
 		return ErrBusy
 	}
 	s.cancel()
@@ -145,8 +153,18 @@ func (s *Service) Subscribe() (<-chan struct{}, func()) {
 	}
 }
 
+// changedLocked notifies subscribers. Log lines and phases do not invalidate an
+// open confirmation, so the revision follows only versions, commands and plans.
 func (s *Service) changedLocked() {
-	s.state.Revision++
+	data, _ := json.Marshal(struct {
+		Offline bool
+		Agents  []Agent
+		Desktop desktop.Snapshot
+	}{s.state.Offline, s.state.Agents, s.state.Desktop})
+	if sum := sha256.Sum256(data); sum != s.fingerprint {
+		s.fingerprint = sum
+		s.state.Revision++
+	}
 	for ch := range s.subs {
 		select {
 		case ch <- struct{}{}:
@@ -155,13 +173,111 @@ func (s *Service) changedLocked() {
 	}
 }
 
+// busyLocked blocks new upgrades; queued tasks do not, so several can be confirmed in a row.
 func (s *Service) busyLocked() bool {
-	return s.state.Scanning || s.state.Diagnosing || s.state.ActiveTask != "" || s.ctx.Err() != nil
+	return s.state.Scanning || s.state.Diagnosing || s.ctx.Err() != nil
+}
+
+// idleLocked is required for a full refresh or diagnosis, which replace shared state.
+func (s *Service) idleLocked() bool {
+	return !s.busyLocked() && len(s.state.ActiveTasks) == 0
+}
+
+// enqueueLocked holds the cross-process mutation lock from the first queued task
+// until the queue drains, so another AgentUp cannot interleave with queued work.
+func (s *Service) enqueueLocked(id string, run func()) error {
+	if !s.working {
+		release, err := operation.Acquire("mutation")
+		if err != nil {
+			return ErrBusy
+		}
+		s.release, s.working = release, true
+		s.wg.Add(1)
+		go s.work()
+	}
+	s.queue = append(s.queue, run)
+	s.state.ActiveTasks = append(s.state.ActiveTasks, id)
+	return nil
+}
+
+func (s *Service) work() {
+	defer s.wg.Done()
+	for {
+		s.mu.Lock()
+		if len(s.queue) == 0 {
+			// Release while still holding mu so a new enqueue cannot race the lock file.
+			s.release()
+			s.release, s.working = nil, false
+			s.mu.Unlock()
+			return
+		}
+		run := s.queue[0]
+		s.queue = s.queue[1:]
+		s.mu.Unlock()
+		run()
+	}
+}
+
+func (s *Service) finishLocked(id string) {
+	for i, active := range s.state.ActiveTasks {
+		if active == id {
+			s.state.ActiveTasks = append(s.state.ActiveTasks[:i:i], s.state.ActiveTasks[i+1:]...)
+			break
+		}
+	}
+	s.changedLocked()
+}
+
+// activeLocked reports whether a queued or running task already covers the key.
+func (s *Service) activeLocked(key string) bool {
+	for _, id := range s.state.ActiveTasks {
+		if task := s.taskLocked(id); task != nil {
+			for _, tool := range task.Tools {
+				if string(tool.Name) == key {
+					return true
+				}
+			}
+		}
+		if task := s.desktopTaskLocked(id); task != nil {
+			for _, item := range task.Items {
+				if item.Installation == key {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (s *Service) taskLocked(id string) *Task {
+	for i := range s.state.Tasks {
+		if s.state.Tasks[i].ID == id {
+			return &s.state.Tasks[i]
+		}
+	}
+	return nil
+}
+
+func (s *Service) isActiveLocked(id string) bool {
+	return slices.Contains(s.state.ActiveTasks, id)
+}
+
+// trimHistory drops the oldest finished entry once history is full; active tasks stay.
+func trimHistory[T any](items []T, id func(T) string, active func(string) bool) []T {
+	if len(items) < 20 {
+		return items
+	}
+	for i, item := range items {
+		if !active(id(item)) {
+			return append(items[:i:i], items[i+1:]...)
+		}
+	}
+	return items
 }
 
 func (s *Service) Refresh(offline bool) error {
 	s.mu.Lock()
-	if s.busyLocked() {
+	if !s.idleLocked() {
 		s.mu.Unlock()
 		return ErrBusy
 	}
@@ -188,20 +304,7 @@ func (s *Service) scan(offline bool) {
 	}()
 	d := detector.New(s.r, s.p, s.tools)
 	u := upgrader.New(s.r, s.p, d, s.tools)
-	set := func(info model.ToolInfo) {
-		a := Agent{ToolInfo: info}
-		if info.Installed && info.UpgradeSupported {
-			a.Command, _ = u.Preview(info)
-		}
-		s.mu.Lock()
-		for i := range s.state.Agents {
-			if s.state.Agents[i].Name == a.Name {
-				s.state.Agents[i] = a
-			}
-		}
-		s.changedLocked()
-		s.mu.Unlock()
-	}
+	set := func(info model.ToolInfo) { s.setAgent(u, info) }
 	local := d.DetectAllLocal(func(info model.ToolInfo) {
 		if !offline && info.Installed {
 			info.LatestCheck = model.CheckPending
@@ -222,7 +325,7 @@ func (s *Service) scan(offline bool) {
 
 func (s *Service) Diagnose() error {
 	s.mu.Lock()
-	if s.busyLocked() {
+	if !s.idleLocked() {
 		s.mu.Unlock()
 		return ErrBusy
 	}
@@ -274,37 +377,41 @@ func (s *Service) Upgrade(names []model.ToolName, revision uint64) (string, erro
 		if !found {
 			return "", ErrUnsupported
 		}
+		if s.activeLocked(string(name)) {
+			return "", ErrBusy
+		}
 	}
-	release, err := operation.Acquire("mutation")
-	if err != nil {
-		return "", ErrBusy
+	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), s.state.Revision)
+	if err := s.enqueueLocked(id, func() { s.runUpgrade(id, names, commands) }); err != nil {
+		return "", err
 	}
-	id := fmt.Sprintf("%d-%d", time.Now().UnixMilli(), s.state.Revision)
-	task := Task{ID: id, Status: "running", StartedAt: time.Now(), Tools: []TaskTool{}, Logs: []Log{}}
+	task := Task{ID: id, Status: "queued", StartedAt: time.Now(), Tools: []TaskTool{}, Logs: []Log{}}
 	for _, name := range names {
 		task.Tools = append(task.Tools, TaskTool{Name: name, Phase: model.PhaseWaiting})
 	}
-	if len(s.state.Tasks) >= 20 {
-		s.state.Tasks = s.state.Tasks[1:]
-	}
+	s.state.Tasks = trimHistory(s.state.Tasks, func(t Task) string { return t.ID }, s.isActiveLocked)
 	s.state.Tasks = append(s.state.Tasks, task)
-	s.state.ActiveTask = id
 	s.changedLocked()
-	s.wg.Add(1)
-	go s.runUpgrade(names, commands, release)
 	return id, nil
 }
 
-func (s *Service) runUpgrade(names []model.ToolName, commands map[model.ToolName][]string, release func()) {
-	defer s.wg.Done()
-	defer release()
+func (s *Service) runUpgrade(id string, names []model.ToolName, commands map[model.ToolName][]string) {
+	s.mu.Lock()
+	if task := s.taskLocked(id); task != nil {
+		task.Status, task.StartedAt = "running", time.Now()
+	}
+	s.changedLocked()
+	s.mu.Unlock()
 	d := detector.NewWithoutLatestCheck(s.r, s.p, s.tools)
 	u := upgrader.New(s.r, s.p, d, s.tools)
 	u.SetStreamLogs(true)
 	u.SetObserver(func(event model.UpgradeEvent) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		task := &s.state.Tasks[len(s.state.Tasks)-1]
+		task := s.taskLocked(id)
+		if task == nil {
+			return
+		}
 		for i := range task.Tools {
 			if task.Tools[i].Name == event.Name {
 				task.Tools[i].Phase = event.Phase
@@ -347,25 +454,56 @@ func (s *Service) runUpgrade(names []model.ToolName, commands map[model.ToolName
 	}
 	wg.Wait()
 	s.mu.Lock()
-	task := &s.state.Tasks[len(s.state.Tasks)-1]
-	task.Status = "completed"
-	finished := time.Now()
-	task.FinishedAt = &finished
-	for _, item := range task.Tools {
-		if item.Result == nil || item.Result.Status == model.UpgradeStatusFailed || item.Result.Status == model.UpgradeStatusUnverified {
-			task.Status = "failed"
+	if task := s.taskLocked(id); task != nil {
+		task.Status = "completed"
+		finished := time.Now()
+		task.FinishedAt = &finished
+		for _, item := range task.Tools {
+			if item.Result == nil || item.Result.Status == model.UpgradeStatusFailed || item.Result.Status == model.UpgradeStatusUnverified {
+				task.Status = "failed"
+			}
 		}
 	}
-	s.state.ActiveTask = ""
 	offline := s.state.Offline
-	scan := s.ctx.Err() == nil
-	s.state.Scanning = scan
 	s.changedLocked()
 	s.mu.Unlock()
-	// Re-check actual installed versions before releasing the operation lock.
-	if scan {
-		s.scan(offline)
+	// Re-check only the upgraded tools, so other rows keep their state and stay usable.
+	if s.ctx.Err() == nil {
+		s.redetect(names, offline)
 	}
+	s.mu.Lock()
+	s.finishLocked(id)
+	s.mu.Unlock()
+}
+
+func (s *Service) redetect(names []model.ToolName, offline bool) {
+	d := detector.New(s.r, s.p, s.tools)
+	if offline {
+		d = detector.NewWithoutLatestCheck(s.r, s.p, s.tools)
+	}
+	u := upgrader.New(s.r, s.p, d, s.tools)
+	for _, name := range names {
+		info, err := d.Detect(name)
+		if err != nil {
+			continue
+		}
+		s.setAgent(u, info)
+	}
+}
+
+func (s *Service) setAgent(u *upgrader.Upgrader, info model.ToolInfo) {
+	a := Agent{ToolInfo: info}
+	if info.Installed && info.UpgradeSupported {
+		a.Command, _ = u.Preview(info)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.state.Agents {
+		if s.state.Agents[i].Name == a.Name {
+			s.state.Agents[i] = a
+		}
+	}
+	s.changedLocked()
 }
 
 func clean(text string) string {

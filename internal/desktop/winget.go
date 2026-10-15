@@ -81,7 +81,6 @@ func (m *Manager) wingetCheck(info *Installation, winget string) {
 	}
 	info.Channel, info.Capability, info.Reason = target.source, Automatic, ""
 	info.spec = planSpec{
-		channel:    "winget",
 		command:    []string{winget, "upgrade", "--id", target.id, "--exact", "--source", target.source, "--disable-interactivity"},
 		standalone: info.ProductID == "codex.desktop",
 	}

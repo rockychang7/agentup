@@ -86,7 +86,7 @@ func TestOpenCodeServiceUsesConfirmedPackage(t *testing.T) {
 				t.Fatal(err)
 			}
 			state = waitState(t, s, func(state State) bool {
-				return !state.Scanning && state.ActiveTask == "" && len(state.Tasks) > 0
+				return !state.Scanning && len(state.ActiveTasks) == 0 && len(state.Tasks) > 0
 			})
 			result := state.Tasks[0].Tools[0].Result
 			want := []string{"npm", "install", "-g", tt.pkg + "@latest"}
@@ -109,7 +109,7 @@ func TestOpenCodeServiceRejectsChangedReleaseLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	state = waitState(t, s, func(state State) bool {
-		return !state.Scanning && state.ActiveTask == "" && len(state.Tasks) > 0
+		return !state.Scanning && len(state.ActiveTasks) == 0 && len(state.Tasks) > 0
 	})
 	result := state.Tasks[0].Tools[0].Result
 	if state.Tasks[0].Status != "failed" || result == nil || result.Outcome != model.OutcomeFailed {

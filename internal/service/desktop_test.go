@@ -69,7 +69,7 @@ func TestDesktopHandoffTaskUsesBoundedLogsAndNeverClaimsUpdated(t *testing.T) {
 	if _, err := s.UpgradeDesktops([]string{"trusted-plan"}, 42); err != nil {
 		t.Fatal(err)
 	}
-	state := waitState(t, s, func(state State) bool { return state.ActiveTask == "" && !state.Scanning })
+	state := waitState(t, s, func(state State) bool { return len(state.ActiveTasks) == 0 && !state.Scanning })
 	task := state.DesktopTasks[0]
 	if task.Status != "handed_off" || task.Items[0].Result.Outcome != "handed_off" {
 		t.Fatalf("handoff was displayed as a verified upgrade: %+v", task)
@@ -148,5 +148,50 @@ func TestDesktopTaskProtectsShutdownAndOtherOperations(t *testing.T) {
 	if stopErr != ErrBusy || refreshErr != ErrBusy {
 		t.Fatalf("active desktop operation was not protected: stop=%v refresh=%v", stopErr, refreshErr)
 	}
-	waitState(t, s, func(state State) bool { return state.ActiveTask == "" && !state.Scanning })
+	waitState(t, s, func(state State) bool { return len(state.ActiveTasks) == 0 && !state.Scanning })
+}
+
+func TestQueuedTasksRunInOrderWhileOthersStayAvailable(t *testing.T) {
+	s, backend := desktopServiceFixture(t)
+	second := backend.snapshot.Installations[0]
+	second.ID, second.Name = "second-installation", "Second app"
+	plan := *second.Plan
+	plan.ID, plan.Installation = "second-plan", second.ID
+	second.Plan = &plan
+	backend.snapshot.Installations = append(backend.snapshot.Installations, second)
+	s.state.Desktop = backend.snapshot
+	gate := make(chan struct{})
+	backend.gate = gate
+	first, err := s.UpgradeDesktops([]string{"trusted-plan"}, 42)
+	if err != nil {
+		close(gate)
+		t.Fatal(err)
+	}
+	// Log lines and phases from the running task must not invalidate the next confirmation.
+	revision := s.Snapshot().Revision
+	if _, err := s.UpgradeDesktops([]string{"trusted-plan"}, revision); err != ErrBusy {
+		close(gate)
+		t.Fatalf("the same installation was queued twice: %v", err)
+	}
+	next, err := s.UpgradeDesktops([]string{"second-plan"}, revision)
+	if err != nil {
+		close(gate)
+		t.Fatal("a running task blocked another installation:", err)
+	}
+	state := s.Snapshot()
+	if len(state.ActiveTasks) != 2 || state.ActiveTasks[0] != first || state.ActiveTasks[1] != next ||
+		state.DesktopTasks[1].Status != "queued" {
+		close(gate)
+		t.Fatalf("second task was not queued behind the first: %+v", state)
+	}
+	close(gate)
+	state = waitState(t, s, func(state State) bool { return len(state.ActiveTasks) == 0 })
+	if len(backend.executed) != 2 || backend.executed[0].ID != "trusted-plan" || backend.executed[1].ID != "second-plan" {
+		t.Fatalf("queued plans did not run in order: %+v", backend.executed)
+	}
+	for _, task := range state.DesktopTasks {
+		if task.Status != "handed_off" {
+			t.Fatalf("queued task did not finish: %+v", task)
+		}
+	}
 }

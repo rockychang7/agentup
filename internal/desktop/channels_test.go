@@ -73,16 +73,10 @@ func antigravityRecord(version string) windowsRecord {
 	}
 }
 
-func TestWingetChannelNeedsAcceptanceAndKeepsCodexStandalone(t *testing.T) {
+func TestWingetKeepsCodexStandalone(t *testing.T) {
 	m, mr := windowsFixture(t, []windowsRecord{codexRecord})
 	wingetList(mr, "9PLM9XGG6VKS", "msstore", runner.MockResult{Stdout: "名称    ID           版本\n-----\nChatGPT 9PLM9XGG6VKS 26.1007.9446.0\n"})
 	info := productInstallation(t, m.Scan(false), "codex.desktop")
-	if info.Capability != Guided || info.Reason != "channel_unverified" || info.Plan.Action != ActionGuide ||
-		info.LatestSource != LatestMSStore || info.Arch != "amd64" {
-		t.Fatalf("unaccepted WinGet channel became executable: %+v", info)
-	}
-	m.channels["winget"] = true
-	info = productInstallation(t, m.Scan(false), "codex.desktop")
 	want := "winget.exe " + strings.Join(wingetUpgrade("9PLM9XGG6VKS", "msstore"), " ")
 	if info.Capability != Automatic || info.Plan == nil || strings.Join(info.Plan.Command, " ") != want ||
 		!info.Plan.Standalone || info.LatestCheck != model.CheckUnavailable || info.Channel != "msstore" {
@@ -90,27 +84,8 @@ func TestWingetChannelNeedsAcceptanceAndKeepsCodexStandalone(t *testing.T) {
 	}
 }
 
-func TestOnlyAcceptedCellsAreEnabledByDefault(t *testing.T) {
-	t.Setenv(ChannelsEnv, "")
-	m := New(context.Background(), runner.NewMockRunner(), "Windows", "amd64")
-	if !m.channelEnabled("winget", "antigravity.desktop") || !m.channelEnabled("brew-cask", "codex.desktop") {
-		t.Fatal("accepted channels are not enabled")
-	}
-	for _, cell := range [][2]string{{"winget", "codex.desktop"}, {"winget", "opencode.desktop"}, {"installer", "opencode.desktop"}, {"apt", "codex.desktop"}, {"dnf", "codex.desktop"}, {"", "codex.desktop"}} {
-		if m.channelEnabled(cell[0], cell[1]) {
-			t.Fatalf("unaccepted cell %v is enabled", cell)
-		}
-	}
-	t.Setenv(ChannelsEnv, " winget/codex.desktop , apt")
-	m = New(context.Background(), runner.NewMockRunner(), "Windows", "amd64")
-	if !m.channelEnabled("winget", "codex.desktop") || m.channelEnabled("winget", "opencode.desktop") || !m.channelEnabled("apt", "claude.desktop") {
-		t.Fatal("acceptance overrides were not scoped correctly")
-	}
-}
-
 func TestWingetRequiresExactProductCodeAndVersion(t *testing.T) {
 	m, mr := windowsFixture(t, []windowsRecord{antigravityRecord("2.18.1")})
-	m.channels["winget"] = true
 	wingetList(mr, "Google.Antigravity", "winget", runner.MockResult{Stdout: "Name ID Version Available\n---\nAntigravity 2.18.1 Google.Antigravity 2.18.1 2.23.1\n"})
 	info := productInstallation(t, m.Scan(false), "antigravity.desktop")
 	if info.Capability != Automatic || !info.UpgradeAvailable || info.LatestVersion != "2.23.1" ||
@@ -127,7 +102,6 @@ func TestWingetRequiresExactProductCodeAndVersion(t *testing.T) {
 	other := antigravityRecord("2.18.1")
 	other.Package = "unrelated-key"
 	m, mr = windowsFixture(t, []windowsRecord{other})
-	m.channels["winget"] = true
 	mr.SetLookPath("winget.exe", "winget.exe", nil)
 	info = productInstallation(t, m.Scan(false), "antigravity.desktop")
 	if info.Capability != Guided || info.Plan.Action != ActionGuide {
@@ -152,7 +126,6 @@ func TestWingetRequiresExactProductCodeAndVersion(t *testing.T) {
 func TestOpenCodeUsesWingetOnlyWithinVersionOne(t *testing.T) {
 	v1 := windowsRecord{Name: "OpenCode 1.18.0", Version: "1.18.0", Publisher: "OpenCode", Package: "oc", Path: `C:\OpenCode\OpenCode.exe`, Scope: "user", Source: "installer"}
 	m, mr := windowsFixture(t, []windowsRecord{v1})
-	m.channels["winget"] = true
 	wingetList(mr, "SST.OpenCodeDesktop", "winget", runner.MockResult{Stdout: "OpenCode 1.18.0 SST.OpenCodeDesktop 1.18.0 1.19.0\n"})
 	info := productInstallation(t, m.Scan(false), "opencode.desktop")
 	if info.Capability != Automatic || info.LatestVersion != "1.19.0" || info.Plan == nil || info.Plan.Action != ActionCommand {
@@ -166,7 +139,6 @@ func TestOpenCodeUsesWingetOnlyWithinVersionOne(t *testing.T) {
 	v2 := v1
 	v2.Name, v2.Version = "OpenCode 2.0.29", "2.0.29"
 	m, mr = windowsFixture(t, []windowsRecord{v2})
-	m.channels["winget"] = true
 	wingetList(mr, "SST.OpenCodeDesktop", "winget", runner.MockResult{Stdout: "OpenCode 2.0.29 SST.OpenCodeDesktop 2.0.29\n"})
 	m.Scan(false)
 	for _, call := range mr.Calls {
@@ -191,7 +163,6 @@ func TestWingetExitCodesAreMappedAndVersionIsVerified(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, mr := windowsFixture(t, []windowsRecord{antigravityRecord("2.18.1")})
-			m.channels["winget"] = true
 			wingetList(mr, "Google.Antigravity", "winget", runner.MockResult{Stdout: "Antigravity 2.18.1 Google.Antigravity 2.18.1 2.23.1\n"})
 			mr.SetResult("winget.exe", wingetUpgrade("Google.Antigravity", "winget"), runner.MockResult{ExitCode: tc.code, Stdout: "progress\n"})
 			info := productInstallation(t, m.Scan(false), "antigravity.desktop")
@@ -289,7 +260,6 @@ func newInstallerFixture(t *testing.T, signature string) installerFixture {
 	writePE(t, filepath.Join(dir, "OpenCode.exe"), 0x8664)
 	record := windowsRecord{Name: "OpenCode 2.0.28", Version: "2.0.28", Publisher: "OpenCode", Package: "oc", Path: dir, Scope: "user", Source: "installer"}
 	m, mr := windowsFixture(t, []windowsRecord{record})
-	m.channels["installer"] = true
 	m.fetch = func(_ context.Context, url string, _ int64) ([]byte, error) {
 		if url != openCodeManifest+"latest.yml" {
 			t.Fatalf("unexpected metadata URL %s", url)
@@ -428,11 +398,6 @@ func TestAptUpdateRunsOnlyFromTerminal(t *testing.T) {
 	m, mr := linuxFixture(t)
 	debChatGPT(mr, "26.1007.1-1", "26.1013.2-1")
 	info := productInstallation(t, m.Scan(false), "codex.desktop")
-	if info.Capability != Guided || info.Reason != "channel_unverified" || info.Running != "stopped" {
-		t.Fatalf("unaccepted APT channel became executable: %+v", info)
-	}
-	m.channels["apt"] = true
-	info = productInstallation(t, m.Scan(false), "codex.desktop")
 	if info.Capability != Privileged || info.Plan == nil || info.Plan.Action != ActionPrivileged || !info.Plan.RequiresAdmin ||
 		strings.Join(info.Plan.Command, " ") != "sudo apt-get install --only-upgrade chatgpt" || info.LatestSource != LatestAPT {
 		t.Fatalf("APT plan is wrong: %+v %+v", info, info.Plan)
@@ -463,7 +428,6 @@ func TestLinuxRunningAppBlocksPackageUpdate(t *testing.T) {
 		t.Skip("process links use Linux paths")
 	}
 	m, mr := linuxFixture(t)
-	m.channels["apt"] = true
 	debChatGPT(mr, "26.1007.1-1", "26.1013.2-1")
 	if err := os.MkdirAll(filepath.Join(m.procRoot, "4242"), 0o755); err != nil {
 		t.Fatal(err)
@@ -483,7 +447,6 @@ func TestLinuxRunningAppBlocksPackageUpdate(t *testing.T) {
 
 func TestDnfCandidateComesFromCacheOnly(t *testing.T) {
 	m, mr := linuxFixture(t)
-	m.channels["dnf"] = true
 	mr.SetLookPath("rpm", "rpm", nil)
 	mr.SetLookPath("dnf", "dnf", nil)
 	mr.SetResultByName("rpm", runner.MockResult{ExitCode: 1})
