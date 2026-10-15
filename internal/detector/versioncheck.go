@@ -66,6 +66,9 @@ func (d *Detector) checkLatestVersion(tool config.ToolConfig, method model.Insta
 		if tool.Name == model.ToolOpenCode {
 			return d.checkOpenCodeNativeLatest(tool)
 		}
+		if tool.Name == model.ToolAgy {
+			return d.checkAgyLatestVersion()
+		}
 		if tool.NpmPackage != "" {
 			return d.checkNpmLatestVersion(tool)
 		}

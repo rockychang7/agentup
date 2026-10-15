@@ -13,10 +13,12 @@ import (
 	"agentup/internal/operation"
 	"agentup/internal/platform"
 	"agentup/internal/runner"
+	"agentup/internal/testutil"
 )
 
 func newTestService(t *testing.T) (*Service, *runner.MockRunner) {
 	t.Helper()
+	testutil.StubAgyManifest(t, "1.1.0")
 	t.Setenv("LOCALAPPDATA", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
@@ -27,6 +29,35 @@ func newTestService(t *testing.T) (*Service, *runner.MockRunner) {
 	s := New(context.Background(), "test", "test", mr, platform.NewPlatform(), config.DefaultTools())
 	t.Cleanup(s.Close)
 	return s, mr
+}
+
+func TestAgyRefreshReportsLatestAndOfflineSkipsHTTP(t *testing.T) {
+	s, mr := newTestService(t)
+	calls := testutil.StubAgyManifest(t, "1.1.0")
+	if err := s.Refresh(false); err != nil {
+		t.Fatal(err)
+	}
+	state := waitState(t, s, func(state State) bool { return !state.Scanning })
+	agy := state.Agents[3]
+	if agy.LatestCheck != model.CheckOK || agy.LatestVersion != "1.1.0" || !agy.UpgradeAvailable {
+		t.Fatalf("Agy manifest was not exposed to the UI: %+v", agy)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("expected one online lookup, got %d", calls.Load())
+	}
+	if err := s.Refresh(true); err != nil {
+		t.Fatal(err)
+	}
+	state = waitState(t, s, func(state State) bool { return !state.Scanning })
+	agy = state.Agents[3]
+	if agy.LatestCheck != model.CheckOffline || agy.LatestVersion != "" || agy.UpgradeAvailable || calls.Load() != 1 {
+		t.Fatalf("offline refresh kept stale latest data or queried HTTP: %+v, requests=%d", agy, calls.Load())
+	}
+	for _, call := range mr.Calls {
+		if len(call.Args) > 0 && call.Args[0] == "update" {
+			t.Fatal("version lookup ran the Agy updater")
+		}
+	}
 }
 
 func waitState(t *testing.T, s *Service, predicate func(State) bool) State {

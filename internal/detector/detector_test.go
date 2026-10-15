@@ -6,6 +6,7 @@ import (
 	"agentup/internal/config"
 	"agentup/internal/model"
 	"agentup/internal/runner"
+	"agentup/internal/testutil"
 )
 
 // testPlatform is a mock Platform for testing.
@@ -196,7 +197,7 @@ func TestDetect_BinaryOnlyToolDetectedAsSelfUpdate(t *testing.T) {
 		ExitCode: 0,
 	})
 
-	det := New(mr, macTestPlatform(), config.DefaultTools())
+	det := NewWithoutLatestCheck(mr, macTestPlatform(), config.DefaultTools())
 	info, _ := det.Detect(model.ToolAgy)
 
 	if !info.Installed {
@@ -466,7 +467,8 @@ func TestDetect_LatestVersionBrewCask(t *testing.T) {
 	}
 }
 
-func TestDetect_LatestVersionSelfUpdateNoNpmPackage(t *testing.T) {
+func TestDetect_LatestVersionAgyManifest(t *testing.T) {
+	calls := testutil.StubAgyManifest(t, "1.0.17")
 	mr := runner.NewMockRunner()
 
 	mr.SetLookPath("agy", "/usr/local/bin/agy", nil)
@@ -484,11 +486,13 @@ func TestDetect_LatestVersionSelfUpdateNoNpmPackage(t *testing.T) {
 	if info.InstallMethod != model.InstallMethodSelfUpdate {
 		t.Errorf("expected install method 'self-update', got '%s'", info.InstallMethod)
 	}
-	// agy has no NpmPackage, so latest version can't be determined
-	if info.LatestVersion != "" {
-		t.Errorf("expected empty LatestVersion for agy (no npm package), got '%s'", info.LatestVersion)
+	if info.LatestCheck != model.CheckOK || info.LatestVersion != "1.0.17" {
+		t.Errorf("expected Agy manifest version '1.0.17', got %+v", info)
 	}
-	if info.UpgradeAvailable {
-		t.Error("expected UpgradeAvailable to be false for agy")
+	if !info.UpgradeAvailable {
+		t.Error("expected UpgradeAvailable to be true for agy")
+	}
+	if calls.Load() != 1 {
+		t.Errorf("expected one Agy manifest request, got %d", calls.Load())
 	}
 }

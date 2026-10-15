@@ -129,6 +129,8 @@ agentup list --offline
 
 先显示本机检测进度和已完成的结果，再查询各安装来源的最新版本。`--offline` 跳过最新版本查询，但仍读取本地版本和安装方式。
 
+Agy 通过官方安装器使用的发布清单查询当前操作系统和架构的最新版本，无需 npm，也不会执行 `agy update`。查询失败会显示 `Check failed`，实际升级仍使用 Agy 自更新命令。
+
 示例输出（版本仅为演示）：
 
 ```text
@@ -140,9 +142,9 @@ Agent        Version           Source       Status
 codex        0.12.3 -> 0.13.0   npm          Update available
 claude-code  1.0.25             npm          Up to date
 opencode     -                  -            Not installed
-agy          0.3.5              self-update  Latest unavailable
+agy          0.3.5 -> 0.3.6     self-update  Update available
 
-3 installed / 4 supported | 1 updates | 0 checks failed
+3 installed / 4 supported | 2 updates | 0 checks failed
 
 Next: agentup upgrade
 ```

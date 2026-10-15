@@ -12,7 +12,7 @@ func TestLatestFailureAndUnavailableAreDifferent(t *testing.T) {
 	mr := runner.NewMockRunner()
 	d := New(mr, macTestPlatform(), config.DefaultTools())
 	failed := d.CheckLatest(model.ToolInfo{Name: model.ToolCodex, Installed: true, Version: "1.0.0", InstallMethod: model.InstallMethodNpm})
-	unavailable := d.CheckLatest(model.ToolInfo{Name: model.ToolAgy, Installed: true, Version: "1.0.0", InstallMethod: model.InstallMethodSelfUpdate})
+	unavailable := d.CheckLatest(model.ToolInfo{Name: model.ToolCodex, Installed: true, Version: "1.0.0", InstallMethod: model.InstallMethodBinary})
 	if failed.LatestCheck != model.CheckFailed || failed.CheckMessage == "" || failed.UpgradeAvailable {
 		t.Fatalf("failed check must have a reason: %+v", failed)
 	}

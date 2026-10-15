@@ -16,6 +16,7 @@ import (
 	"agentup/internal/platform"
 	"agentup/internal/runner"
 	"agentup/internal/service"
+	"agentup/internal/testutil"
 )
 
 func fixture(t *testing.T) *Server {
@@ -251,6 +252,7 @@ func (r *shutdownRunner) Run(name string, args ...string) (string, string, int, 
 }
 
 func TestShutdownProtectsActiveUpgradeUnlessForced(t *testing.T) {
+	testutil.StubAgyManifest(t, "1.1.0")
 	t.Setenv("LOCALAPPDATA", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
