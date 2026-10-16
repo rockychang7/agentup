@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -95,15 +96,67 @@ func (m *Manager) wingetCheck(info *Installation, winget string) {
 		info.LatestSource = LatestWinget
 		candidate(info, available)
 	case target.source == "msstore":
-		// The Store source does not list available versions; the upgrade itself reports no_update.
-		info.LatestSource, info.LatestCheck = LatestMSStore, model.CheckUnavailable
-		info.CheckMessage = "Microsoft Store does not report an available version through WinGet."
-		info.spec.unknownOK = true
+		// WinGet reports Store versions as "Unknown", so `winget upgrade` always ends with
+		// "no applicable upgrade". The Store catalog gives the version, and an install with
+		// --force hands the update to the Store, which keeps the app's data.
+		info.spec.command = []string{winget, "install", "--id", target.id, "--exact", "--source", target.source, "--force", "--disable-interactivity"}
+		info.LatestSource = LatestMSStore
+		if latest, err := m.storeVersion(target.id, info.PackageID, info.Arch); err == nil {
+			candidate(info, latest)
+		} else {
+			info.LatestCheck, info.CheckMessage = model.CheckUnavailable, "Microsoft Store catalog: "+err.Error()
+			info.spec.unknownOK = true
+		}
 	default:
 		// The community source omits the Available column when nothing newer exists.
 		info.LatestSource = LatestWinget
 		candidate(info, installed)
 	}
+}
+
+// storeVersion reads the newest package version for this package name and
+// architecture from the Microsoft Store catalog.
+func (m *Manager) storeVersion(productID, name, arch string) (string, error) {
+	data, err := m.fetch(m.ctx, "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds="+productID+"&market=US&languages=en-us", 2<<20)
+	if err != nil {
+		return "", err
+	}
+	var catalog struct {
+		Products []struct {
+			DisplaySkuAvailabilities []struct {
+				Sku struct {
+					Properties struct {
+						Packages []struct {
+							PackageFullName string
+						}
+					}
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		return "", err
+	}
+	storeArch := map[string]string{"amd64": "x64", "arm64": "arm64"}[arch]
+	latest := ""
+	for _, product := range catalog.Products {
+		for _, sku := range product.DisplaySkuAvailabilities {
+			for _, pkg := range sku.Sku.Properties.Packages {
+				// PackageFullName: Name_Version_Arch_ResourceId_PublisherId
+				parts := strings.Split(pkg.PackageFullName, "_")
+				if len(parts) != 5 || parts[0] != name || (parts[2] != storeArch && parts[2] != "neutral") {
+					continue
+				}
+				if cmp, ok := compareVersion(latest, parts[1]); latest == "" || (ok && cmp < 0) {
+					latest = parts[1]
+				}
+			}
+		}
+	}
+	if !numericVersion.MatchString(latest) {
+		return "", fmt.Errorf("no %s package for %s", arch, name)
+	}
+	return latest, nil
 }
 
 type wingetCode struct{ outcome, message string }

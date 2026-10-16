@@ -77,10 +77,36 @@ func TestWingetKeepsCodexStandalone(t *testing.T) {
 	m, mr := windowsFixture(t, []windowsRecord{codexRecord})
 	wingetList(mr, "9PLM9XGG6VKS", "msstore", runner.MockResult{Stdout: "名称    ID           版本\n-----\nChatGPT 9PLM9XGG6VKS 26.1007.9446.0\n"})
 	info := productInstallation(t, m.Scan(false), "codex.desktop")
-	want := "winget.exe " + strings.Join(wingetUpgrade("9PLM9XGG6VKS", "msstore"), " ")
+	// `winget upgrade` never applies to Store packages because WinGet reports their version as Unknown.
+	want := "winget.exe install --id 9PLM9XGG6VKS --exact --source msstore --force --disable-interactivity"
 	if info.Capability != Automatic || info.Plan == nil || strings.Join(info.Plan.Command, " ") != want ||
 		!info.Plan.Standalone || info.LatestCheck != model.CheckUnavailable || info.Channel != "msstore" {
 		t.Fatalf("Codex Store plan is wrong: %+v %+v", info, info.Plan)
+	}
+}
+
+func TestCodexLatestVersionComesFromTheStoreCatalog(t *testing.T) {
+	m, mr := windowsFixture(t, []windowsRecord{codexRecord})
+	wingetList(mr, "9PLM9XGG6VKS", "msstore", runner.MockResult{Stdout: "ChatGPT 9PLM9XGG6VKS 26.1007.9446.0\n"})
+	catalog := `{"Products":[{"DisplaySkuAvailabilities":[{"Sku":{"Properties":{"Packages":[
+		{"PackageFullName":"OpenAI.Codex_26.1013.3656.0_arm64__2p2nqsd0c76g0"},
+		{"PackageFullName":"OpenAI.Codex_26.1013.3656.0_x64__2p2nqsd0c76g0"},
+		{"PackageFullName":"OpenAI.Codex_27.1.1.0_x86__2p2nqsd0c76g0"},
+		{"PackageFullName":"Other.App_99.0.0.0_x64__2p2nqsd0c76g0"}]}}}]}]}`
+	m.fetch = func(_ context.Context, url string, _ int64) ([]byte, error) {
+		if !strings.HasPrefix(url, "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=9PLM9XGG6VKS&") {
+			t.Fatalf("unexpected catalog URL %s", url)
+		}
+		return []byte(catalog), nil
+	}
+	info := productInstallation(t, m.Scan(false), "codex.desktop")
+	if info.LatestCheck != model.CheckOK || info.LatestVersion != "26.1013.3656.0" || !info.UpgradeAvailable ||
+		info.LatestSource != LatestMSStore || info.Plan == nil || info.Plan.TargetVersion != "26.1013.3656.0" {
+		t.Fatalf("Store catalog version was not used: %+v %+v", info, info.Plan)
+	}
+	catalog = strings.ReplaceAll(catalog, "26.1013.3656.0", "26.1007.9446.0")
+	if info := productInstallation(t, m.Scan(false), "codex.desktop"); info.UpgradeAvailable || info.LatestCheck != model.CheckOK || info.Plan != nil {
+		t.Fatalf("an up-to-date Store app still offered an upgrade: %+v", info)
 	}
 }
 

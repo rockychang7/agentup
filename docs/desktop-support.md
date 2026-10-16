@@ -51,7 +51,7 @@ agentup ui
 
 | App | Windows | macOS | Linux |
 | --- | --- | --- | --- |
-| ChatGPT / Codex | MSIX 按包族识别；WinGet `msstore` 核对；**自动**（`winget upgrade`），需单独确认、不进批量 | Homebrew Cask `chatgpt` 装的：**自动**；直接装的：引导 + 参考版本 | DEB/RPM；APT/DNF 本机缓存查最新版本；有 `pkexec` 时 **自动**（弹系统密码框），否则 **授权命令** |
+| ChatGPT / Codex | MSIX 按包族识别；WinGet `msstore` 核对；最新版本查微软商店官方目录；**自动**（`winget install --force`，交给商店更新），需单独确认、不进批量 | Homebrew Cask `chatgpt` 装的：**自动**；直接装的：引导 + 参考版本 | DEB/RPM；APT/DNF 本机缓存查最新版本；有 `pkexec` 时 **自动**（弹系统密码框），否则 **授权命令** |
 | Claude | MSIX 按包族、EXE 按卸载键 `AnthropicClaude`（当前用户）识别；WinGet `Anthropic.Claude` **自动** | 同上，Cask `claude` | DEB `claude-desktop`；APT 查最新版本；有 `pkexec` 时 **自动**（弹系统密码框），否则 **授权命令** |
 | OpenCode | 读主程序架构；v2：官方清单 + **交互安装**；v1：WinGet **自动** | 同上，Cask `opencode-desktop` | DEB/RPM：官方清单查最新版本；有 `pkexec` 时 **自动**（下载官方 .deb/.rpm、核对大小和 SHA-512，弹系统密码框后用 apt-get/dnf 安装），没有时引导；Flatpak `ai.opencode.opencode`：**自动**（`flatpak update`）；官方 AppImage（用户目录内）：**自动**，下载校验后原地替换 |
 | Antigravity | 只认 2.x；ProductCode + WinGet 核对；**自动** | 同上，Cask `antigravity`，只认 2.x | 解压版：固定目录或 `.desktop` 启动项找解压目录，引导；Snap `antigravity`（Canonical 已认证发布）：**自动**（`snap refresh`，可能弹系统密码框） |
@@ -85,6 +85,7 @@ Homebrew 的认领规则：
 - Linux 通过 `/proc/*/exe` 判断 App 是否在运行；读不了进程表就显示“未知”，不执行升级。DEB 和 RPM 都查。
 - Linux 的 Antigravity 解压版只认 `~/.local/share/antigravity`、`/opt/Antigravity` 和 `.desktop` 启动项指向的目录；ASAR 打包和 Arch 安装暂不识别。
 - Linux 的 APT/DNF 升级在网页里通过 `pkexec` 执行：系统弹出自己的密码框，AgentUp 碰不到密码。取消密码框记为“已取消”，什么都不改；桌面没有授权程序（比如远程 SSH 会话）时提示改在终端用 sudo 执行。命令行 `agentup upgrade` 仍然用 sudo 在当前终端里输密码。
+- 微软商店的 App 在 WinGet 里版本显示为 Unknown，`winget upgrade` 因此永远返回“没有可用升级”（0x8A15002B），不会去联系商店。所以最新版本改为读商店官方目录（displaycatalog.mp.microsoft.com，只读元数据，按包名和架构匹配），升级改用微软给出的 `winget install --force`。
 - Flatpak 和 Snap 只认表里写的包名，Snap 还要求发布者是已认证的那一个。Claude、ChatGPT 在 Snap 商店里的同名包都是第三方套壳，不接管。
 - AppImage 只认 OpenCode：在 `~/Applications`、`~/AppImages`、`~/.local/bin`、`~/Downloads`、`/opt` 和启动项指向的位置找文件名含 `opencode` 的 AppImage，再读包内启动项确认名字是 OpenCode、取 `X-AppImage-Version`（只运行 AppImage 自带的解包程序，不启动应用；结果按文件大小和修改时间缓存）。升级时从官方清单下载，核对大小和 SHA-512，先写到同目录临时文件再整体替换，保留原文件名和权限。用户目录以外的 AppImage 只给入口。
 - 检测失败会报告问题并显示“检测未完成”，不当成“未安装”。

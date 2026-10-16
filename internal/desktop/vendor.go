@@ -24,7 +24,8 @@ import (
 )
 
 // Only these hosts are contacted. Local app update configs are hints, never sources.
-var trustedHosts = map[string]bool{"opencode.ai": true, "formulae.brew.sh": true}
+// Microsoft's Store catalog is read for metadata only; nothing is downloaded from it.
+var trustedHosts = map[string]bool{"opencode.ai": true, "formulae.brew.sh": true, "displaycatalog.mp.microsoft.com": true}
 
 const (
 	openCodeManifest  = "https://opencode.ai/update/api/latest/desktop/opencode/"
