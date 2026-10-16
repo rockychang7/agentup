@@ -20,7 +20,7 @@ export function App() {
   const [language, setLanguage] = useState<Language>(initialLanguage)
   const [theme, setTheme] = useState(() => preference('theme') === 'light' ? 'light' : 'dark')
   const [page, setPage] = useState<Page>('agents')
-  const [kind, setKind] = useState<KindFilter>(() => preference('kind') === 'desktop' ? 'desktop' : 'cli')
+  const [kind, setKind] = useState<KindFilter>('cli')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [stopConfirmation, setStopConfirmation] = useState(false)
@@ -38,7 +38,6 @@ export function App() {
     remember('theme', theme)
     document.documentElement.dataset.theme = theme
   }, [theme])
-  useEffect(() => { remember('kind', kind) }, [kind])
   const errorText = (code: string) => t[code as keyof Dictionary] || t.request_failed
 
   async function act(path: string, body: unknown, done?: () => void) {

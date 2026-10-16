@@ -31,6 +31,7 @@ function cliStatus(agent: Agent, t: Dictionary): [string, Tone] {
 function appStatus(info: DesktopInstallation, t: Dictionary): [string, Tone] {
   if (info.reason === 'discovery_incomplete') return [t.discovery_incomplete, 'bad']
   if (!info.installed) return [t.notInstalled, 'muted']
+  if (info.latest_check === 'pending') return [t.pending, 'accent']
   if (info.latest_check === 'failed') return [t.checkFailed, 'bad']
   if (info.upgrade_available) return [t.updateAvailable, 'warning']
   if (info.latest_check === 'checked') return [t.upToDate, 'good']

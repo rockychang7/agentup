@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"agentup/internal/desktop"
+	"agentup/internal/model"
 	"agentup/internal/operation"
 	"agentup/internal/platform"
 	"agentup/internal/runner"
@@ -19,9 +20,16 @@ type fakeDesktop struct {
 	log      string
 	gate     <-chan struct{}
 	stopped  []string
+	// latest holds back the online scan so the local one can be observed.
+	latest <-chan struct{}
 }
 
-func (f *fakeDesktop) Scan(bool) desktop.Snapshot { return f.snapshot }
+func (f *fakeDesktop) Scan(offline bool) desktop.Snapshot {
+	if !offline && f.latest != nil {
+		<-f.latest
+	}
+	return f.snapshot
+}
 
 func (f *fakeDesktop) Execute(plan desktop.Plan, log func(string, string)) desktop.Result {
 	if f.gate != nil {
@@ -90,6 +98,25 @@ func TestDesktopHandoffTaskUsesBoundedLogsAndNeverClaimsUpdated(t *testing.T) {
 	if !task.LogTruncated || len(task.Logs) != 1 || len(task.Logs[0].Text) > 16<<10 ||
 		strings.Contains(task.Logs[0].Text, "\x1b") {
 		t.Fatalf("desktop logs were not bounded and cleaned: %+v", task.Logs)
+	}
+}
+
+func TestRefreshShowsInstalledAppsBeforeLatestCheck(t *testing.T) {
+	s, backend := desktopServiceFixture(t)
+	latest := make(chan struct{})
+	backend.latest = latest
+	s.state.Desktop = desktop.Snapshot{Installations: []desktop.Installation{}, Issues: []string{}}
+	if err := s.Refresh(false); err != nil {
+		t.Fatal(err)
+	}
+	state := waitState(t, s, func(state State) bool { return len(state.Desktop.Installations) == 1 })
+	if info := state.Desktop.Installations[0]; info.Version != "2.18.1" || info.LatestCheck != model.CheckPending || !state.Scanning {
+		t.Fatalf("installed app was not shown while its latest version was checked: %+v", info)
+	}
+	close(latest)
+	state = waitState(t, s, func(state State) bool { return !state.Scanning })
+	if info := state.Desktop.Installations[0]; info.LatestCheck == model.CheckPending || info.Plan == nil {
+		t.Fatalf("online scan did not replace the local snapshot: %+v", info)
 	}
 }
 

@@ -306,16 +306,38 @@ func (s *Service) scan(offline bool) {
 		}
 		set(info)
 	})
-	if s.ctx.Err() == nil {
-		snapshot := s.desktopManager.Scan(offline)
-		s.mu.Lock()
-		s.state.Desktop = snapshot
-		s.changedLocked()
-		s.mu.Unlock()
+	if s.ctx.Err() != nil {
+		return
 	}
-	if !offline && s.ctx.Err() == nil {
-		d.CheckAllLatest(local, set)
+	// Installed versions are shown first; latest versions follow like CLI rows.
+	snapshot := s.desktopManager.Scan(true)
+	if !offline {
+		snapshot.Installations = append([]desktop.Installation{}, snapshot.Installations...)
+		for i := range snapshot.Installations {
+			if snapshot.Installations[i].Installed {
+				snapshot.Installations[i].LatestCheck = model.CheckPending
+			}
+		}
 	}
+	s.setDesktop(snapshot)
+	if offline || s.ctx.Err() != nil {
+		return
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.setDesktop(s.desktopManager.Scan(false))
+	}()
+	d.CheckAllLatest(local, set)
+	wg.Wait()
+}
+
+func (s *Service) setDesktop(snapshot desktop.Snapshot) {
+	s.mu.Lock()
+	s.state.Desktop = snapshot
+	s.changedLocked()
+	s.mu.Unlock()
 }
 
 func (s *Service) Diagnose() error {
