@@ -60,7 +60,7 @@ agentup ui
 
 各渠道的关键规则：
 
-- **WinGet**：只用精确 ID + 指定来源 + `--disable-interactivity`，不自动接受协议。必须 ProductCode 或包族对上，且 WinGet 报告的已装版本和本机一致。OpenCode 只在“已装 1.x、可用也是 1.x”时走 WinGet（WinGet 会把 2.x 误对上 1.x 的条目，执行会降级）。结果按 WinGet 官方返回码判断，没有更新时结果是 `no_update`。
+- **WinGet**：只用精确 ID + 指定来源 + `--disable-interactivity`，不自动接受来源协议。商店版（msstore）用 `winget install --force` 升级，它每次都要同意商店包协议，所以用户确认升级后会带上 `--accept-package-agreements`；其他情况不自动接受包协议。必须 ProductCode 或包族对上，且 WinGet 报告的已装版本和本机一致。OpenCode 只在“已装 1.x、可用也是 1.x”时走 WinGet（WinGet 会把 2.x 误对上 1.x 的条目，执行会降级）。结果按 WinGet 官方返回码判断，没有更新时结果是 `no_update`。
 - **交互安装（OpenCode Windows v2）**：从 `opencode.ai` 的官方清单按 App 实际架构选安装包，下载后核对大小、SHA-512 和数字签名（发布者必须是 Anomaly Innovations, Inc），然后打开安装窗口，不加静默参数。安装器打开前会写一份“未完成安装回执”，没核对完版本前不会再次打开安装器。
 - **授权命令（Linux APT/DNF）**：命令由后端按登记的包名生成，例如 `sudo apt-get install --only-upgrade chatgpt`。命令行里由你自己输入 sudo 密码；Web 界面只提供“复制命令”，接口拒绝执行。
 - **参考版本（macOS 直接安装）**：读 formulae.brew.sh 的 Cask 版本，界面写明“Homebrew 参考版本”，不是厂商官方最新版。

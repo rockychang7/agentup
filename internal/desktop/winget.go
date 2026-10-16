@@ -98,8 +98,10 @@ func (m *Manager) wingetCheck(info *Installation, winget string) {
 	case target.source == "msstore":
 		// WinGet reports Store versions as "Unknown", so `winget upgrade` always ends with
 		// "no applicable upgrade". The Store catalog gives the version, and an install with
-		// --force hands the update to the Store, which keeps the app's data.
-		info.spec.command = []string{winget, "install", "--id", target.id, "--exact", "--source", target.source, "--force", "--disable-interactivity"}
+		// --force hands the update to the Store, which keeps the app's data. Unlike
+		// `upgrade`, `install` asks for the Store package agreement on every run; the
+		// user accepts it by confirming this plan, so it is passed on their behalf.
+		info.spec.command = []string{winget, "install", "--id", target.id, "--exact", "--source", target.source, "--force", "--accept-package-agreements", "--disable-interactivity"}
 		info.LatestSource = LatestMSStore
 		if latest, err := m.storeVersion(target.id, info.PackageID, info.Arch); err == nil {
 			candidate(info, latest)

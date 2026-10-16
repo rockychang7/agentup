@@ -78,7 +78,7 @@ func TestWingetKeepsCodexStandalone(t *testing.T) {
 	wingetList(mr, "9PLM9XGG6VKS", "msstore", runner.MockResult{Stdout: "名称    ID           版本\n-----\nChatGPT 9PLM9XGG6VKS 26.1007.9446.0\n"})
 	info := productInstallation(t, m.Scan(false), "codex.desktop")
 	// `winget upgrade` never applies to Store packages because WinGet reports their version as Unknown.
-	want := "winget.exe install --id 9PLM9XGG6VKS --exact --source msstore --force --disable-interactivity"
+	want := "winget.exe install --id 9PLM9XGG6VKS --exact --source msstore --force --accept-package-agreements --disable-interactivity"
 	if info.Capability != Automatic || info.Plan == nil || strings.Join(info.Plan.Command, " ") != want ||
 		!info.Plan.Standalone || info.LatestCheck != model.CheckUnavailable || info.Channel != "msstore" {
 		t.Fatalf("Codex Store plan is wrong: %+v %+v", info, info.Plan)
