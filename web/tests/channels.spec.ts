@@ -5,8 +5,9 @@ async function launchApps(page: Page, token: string) {
   await page.goto(`/#token=${token}`)
   await page.getByRole('combobox').selectOption('en')
   await expect(page.getByRole('switch')).toBeEnabled()
-  await page.getByRole('radio', { name: 'Apps only', exact: true }).click()
+  await page.getByRole('radio', { name: 'Desktop apps', exact: true }).click()
 }
+const lane = (page: Page, name: string) => page.locator('.lane').filter({ has: page.getByText(name, { exact: true }) })
 
 test('Codex is confirmed on its own and batch upgrades skip it', async ({ page }, info) => {
   await launchApps(page, `${info.project.name}-channels-batch`)
@@ -20,8 +21,7 @@ test('Codex is confirmed on its own and batch upgrades skip it', async ({ page }
   const request = page.waitForRequest(req => new URL(req.url()).pathname === '/api/desktop/upgrades')
   await page.getByRole('button', { name: 'Confirm and upgrade', exact: true }).click()
   expect((await request).postDataJSON().plans).toEqual(['plan:antigravity.desktop'])
-  await page.getByRole('button', { name: 'View tasks', exact: true }).click()
-  await expect(page.getByText('Updated', { exact: true })).toBeVisible()
+  await expect(lane(page, 'Antigravity app')).toContainText('Just upgraded')
 })
 
 test('installer plans show what is verified before the installer opens', async ({ page }, info) => {
@@ -36,9 +36,7 @@ test('installer plans show what is verified before the installer opens', async (
   await expect(dialog).toContainText('publisher signature')
   await page.screenshot({ path: info.outputPath('installer-confirmation.png'), fullPage: true })
   await dialog.getByRole('button', { name: 'Download & install', exact: true }).click()
-  await page.getByRole('button', { name: 'View tasks', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Upgrade tasks', exact: true })).toBeVisible()
-  await expect(page.getByText('Updated', { exact: true })).toBeVisible()
+  await expect(lane(page, 'OpenCode Desktop')).toContainText('Just upgraded')
 })
 
 test('privileged commands are copied for a terminal and never submitted', async ({ page, context }, info) => {

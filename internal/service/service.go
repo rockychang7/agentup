@@ -70,7 +70,7 @@ type State struct {
 	Doctor       *model.DoctorResult `json:"doctor"`
 	Scanning     bool                `json:"scanning"`
 	Diagnosing   bool                `json:"diagnosing"`
-	ActiveTasks  []string            `json:"active_tasks"` // queued and running, in execution order
+	ActiveTasks  []string            `json:"active_tasks"`
 	Offline      bool                `json:"offline"`
 	Revision     uint64              `json:"revision"`
 	Desktop      desktop.Snapshot    `json:"desktop"`
@@ -90,10 +90,8 @@ type Service struct {
 	desktopManager desktopBackend
 	// fingerprint covers what a confirmation shows; Revision only moves when it changes.
 	fingerprint [32]byte
-	// queue runs confirmed tasks one at a time so package managers never overlap.
-	queue   []func()
-	working bool
-	release func()
+	resources   map[string]*sync.Mutex
+	release     func()
 }
 
 func New(ctx context.Context, version, arch string, r runner.Runner, p platform.Platform, tools []config.ToolConfig) *Service {
@@ -102,7 +100,7 @@ func New(ctx context.Context, version, arch string, r runner.Runner, p platform.
 		r = &runner.DefaultRunner{Context: ctx}
 	}
 	s := &Service{ctx: ctx, cancel: cancel, r: r, p: p, tools: tools, subs: make(map[chan struct{}]struct{}),
-		desktopManager: desktop.New(ctx, r, p.Name(), arch)}
+		desktopManager: desktop.New(ctx, r, p.Name(), arch), resources: make(map[string]*sync.Mutex)}
 	s.state = State{Version: version, OS: p.Name(), Arch: arch, Agents: []Agent{}, Tasks: []Task{}, ActiveTasks: []string{}}
 	s.state.Desktop = desktop.Snapshot{Installations: []desktop.Installation{}, Issues: []string{}}
 	s.state.DesktopTasks = []DesktopTask{}
@@ -173,7 +171,7 @@ func (s *Service) changedLocked() {
 	}
 }
 
-// busyLocked blocks new upgrades; queued tasks do not, so several can be confirmed in a row.
+// Independent upgrades may start while other rows are updating.
 func (s *Service) busyLocked() bool {
 	return s.state.Scanning || s.state.Diagnosing || s.ctx.Err() != nil
 }
@@ -183,39 +181,32 @@ func (s *Service) idleLocked() bool {
 	return !s.busyLocked() && len(s.state.ActiveTasks) == 0
 }
 
-// enqueueLocked holds the cross-process mutation lock from the first queued task
-// until the queue drains, so another AgentUp cannot interleave with queued work.
-func (s *Service) enqueueLocked(id string, run func()) error {
-	if !s.working {
+// startLocked starts work immediately and keeps other AgentUp instances out until
+// all active operations finish. Only the same package manager waits on a lock.
+func (s *Service) startLocked(id string, run func()) error {
+	if s.release == nil {
 		release, err := operation.Acquire("mutation")
 		if err != nil {
 			return ErrBusy
 		}
-		s.release, s.working = release, true
-		s.wg.Add(1)
-		go s.work()
+		s.release = release
 	}
-	s.queue = append(s.queue, run)
 	s.state.ActiveTasks = append(s.state.ActiveTasks, id)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		run()
+	}()
 	return nil
 }
 
-func (s *Service) work() {
-	defer s.wg.Done()
-	for {
-		s.mu.Lock()
-		if len(s.queue) == 0 {
-			// Release while still holding mu so a new enqueue cannot race the lock file.
-			s.release()
-			s.release, s.working = nil, false
-			s.mu.Unlock()
-			return
-		}
-		run := s.queue[0]
-		s.queue = s.queue[1:]
-		s.mu.Unlock()
-		run()
+func (s *Service) resourceLock(key string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.resources[key] == nil {
+		s.resources[key] = &sync.Mutex{}
 	}
+	return s.resources[key]
 }
 
 func (s *Service) finishLocked(id string) {
@@ -224,6 +215,10 @@ func (s *Service) finishLocked(id string) {
 			s.state.ActiveTasks = append(s.state.ActiveTasks[:i:i], s.state.ActiveTasks[i+1:]...)
 			break
 		}
+	}
+	if len(s.state.ActiveTasks) == 0 && s.release != nil {
+		s.release()
+		s.release = nil
 	}
 	s.changedLocked()
 }
@@ -382,10 +377,10 @@ func (s *Service) Upgrade(names []model.ToolName, revision uint64) (string, erro
 		}
 	}
 	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), s.state.Revision)
-	if err := s.enqueueLocked(id, func() { s.runUpgrade(id, names, commands) }); err != nil {
+	if err := s.startLocked(id, func() { s.runUpgrade(id, names, commands) }); err != nil {
 		return "", err
 	}
-	task := Task{ID: id, Status: "queued", StartedAt: time.Now(), Tools: []TaskTool{}, Logs: []Log{}}
+	task := Task{ID: id, Status: "running", StartedAt: time.Now(), Tools: []TaskTool{}, Logs: []Log{}}
 	for _, name := range names {
 		task.Tools = append(task.Tools, TaskTool{Name: name, Phase: model.PhaseWaiting})
 	}
@@ -397,6 +392,14 @@ func (s *Service) Upgrade(names []model.ToolName, revision uint64) (string, erro
 
 func (s *Service) runUpgrade(id string, names []model.ToolName, commands map[model.ToolName][]string) {
 	s.mu.Lock()
+	resources := make(map[model.ToolName]string)
+	for _, agent := range s.state.Agents {
+		key := string(agent.InstallMethod)
+		if key == "self-update" {
+			key += ":" + agent.Path
+		}
+		resources[agent.Name] = key
+	}
 	if task := s.taskLocked(id); task != nil {
 		task.Status, task.StartedAt = "running", time.Now()
 	}
@@ -449,6 +452,9 @@ func (s *Service) runUpgrade(id string, names []model.ToolName, commands map[mod
 		wg.Add(1)
 		go func(name model.ToolName) {
 			defer wg.Done()
+			lock := s.resourceLock(resources[name])
+			lock.Lock()
+			defer lock.Unlock()
 			_, _ = u.UpgradeConfirmed(name, commands[name])
 		}(name)
 	}

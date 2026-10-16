@@ -170,12 +170,17 @@ func parseElectronManifest(data []byte) (electronManifest, error) {
 	return manifest, scanner.Err()
 }
 
+// openCodeAssets maps OS, install source and architecture to the release file suffix.
 var openCodeAssets = map[string]string{
-	"windows/amd64": "-win-x64.exe", "windows/arm64": "-win-arm64.exe",
+	"windows/installer/amd64": "-win-x64.exe", "windows/installer/arm64": "-win-arm64.exe",
+	"linux/appimage/amd64": "-linux-x86_64.AppImage", "linux/appimage/arm64": "-linux-arm64.AppImage",
+	"linux/apt/amd64": "-linux-amd64.deb", "linux/apt/arm64": "-linux-arm64.deb",
+	"linux/rpm/x86_64": "-linux-x86_64.rpm", "linux/rpm/aarch64": "-linux-aarch64.rpm",
 }
 
-// vendorCheck reads OpenCode's official update manifest. On Windows it also offers
-// the matching signed installer; elsewhere it only reports the candidate version.
+// vendorCheck reads OpenCode's official update manifest and offers the matching file:
+// the signed installer on Windows, the AppImage for AppImage installs, and the .deb or
+// .rpm for package installs, which the package manager installs after authorization.
 func (m *Manager) vendorCheck(info *Installation, file string) {
 	data, err := m.fetch(m.ctx, openCodeManifest+file, 256<<10)
 	var manifest electronManifest
@@ -187,11 +192,17 @@ func (m *Manager) vendorCheck(info *Installation, file string) {
 		return
 	}
 	info.LatestSource = LatestVendor
+	// Package versions may carry a release ("2.0.29-1"); the manifest has the upstream version.
+	installed := info.Version
+	if info.Source == "apt" || info.Source == "rpm" {
+		info.Version = upstreamVersion(installed)
+	}
 	candidate(info, manifest.Version)
-	if m.os != "windows" || info.LatestCheck != model.CheckOK || info.Reason == "release_line_change" {
+	info.Version = installed
+	if m.os == "darwin" || info.LatestCheck != model.CheckOK || info.Reason == "release_line_change" {
 		return
 	}
-	suffix := openCodeAssets[m.os+"/"+info.Arch]
+	suffix := openCodeAssets[m.os+"/"+info.Source+"/"+info.Arch]
 	for _, asset := range manifest.Files {
 		if suffix == "" || !strings.HasSuffix(asset.URL, suffix) {
 			continue
@@ -202,6 +213,15 @@ func (m *Manager) vendorCheck(info *Installation, file string) {
 		asset.Publisher = openCodePublisher
 		info.Capability, info.Reason, info.Channel = Interactive, "", "official"
 		info.spec = planSpec{asset: &asset}
+		switch info.Source {
+		case "appimage":
+			info.Capability = Automatic
+			if info.Scope != "user" {
+				info.Capability, info.Reason = Guided, "appimage_system_location"
+			}
+		case "apt", "rpm":
+			m.elevatePackage(info)
+		}
 		return
 	}
 	info.Reason = "architecture_unverified"

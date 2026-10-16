@@ -61,6 +61,10 @@ const (
 	ActionInstaller  = "installer"
 	ActionPrivileged = "privileged_command"
 	ActionGuide      = "guide"
+	// ActionReplace swaps a user-owned AppImage for the verified official download.
+	ActionReplace = "replace"
+	// ActionPackage installs a verified official .deb or .rpm with the package manager.
+	ActionPackage = "package"
 )
 
 // Latest-version sources, shown so users know where a candidate came from.
@@ -72,6 +76,8 @@ const (
 	LatestAPT       = "apt"
 	LatestDNF       = "dnf"
 	LatestVendor    = "vendor-manifest"
+	LatestFlatpak   = "flatpak"
+	LatestSnap      = "snap"
 )
 
 // Asset is an official installer bound to a confirmed plan.
@@ -256,6 +262,10 @@ type planSpec struct {
 	// for sources such as msstore that do not report an available version.
 	unknownOK  bool
 	standalone bool
+	// admin marks an automatic command that asks for the system password itself.
+	admin bool
+	// install is the command a downloaded package path is appended to.
+	install []string
 }
 
 func executable(capability Capability) bool {
@@ -279,15 +289,22 @@ func makePlan(info Installation, spec planSpec) *Plan {
 		switch info.Capability {
 		case Automatic:
 			plan.Action, plan.Command = ActionCommand, spec.command
+			if spec.asset != nil {
+				plan.Action, plan.Command, plan.Asset = ActionReplace, nil, spec.asset
+			}
 		case Privileged:
 			plan.Action, plan.Command, plan.RequiresAdmin = ActionPrivileged, spec.command, true
 		case Interactive:
 			plan.Action, plan.Asset = ActionInstaller, spec.asset
 		}
+		if spec.asset != nil && len(spec.install) != 0 {
+			plan.Action, plan.Command, plan.Asset = ActionPackage, spec.install, spec.asset
+		}
 		if len(plan.Command) == 0 && plan.Asset == nil {
 			return nil
 		}
 		plan.URL, plan.RequiresExit, plan.Standalone = "", true, spec.standalone
+		plan.RequiresAdmin = plan.RequiresAdmin || spec.admin
 	}
 	plan.ID = digest(plan)
 	return plan

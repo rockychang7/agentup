@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const assets = fileURLToPath(new URL('../../internal/webui/assets/', import.meta.url))
 const sessions = new Map()
 const labels = ['codex', 'claude-code', 'opencode', 'agy']
+const parked = new Map()
 function desktopFixture(automatic) {
   return {
     installations: [
@@ -85,6 +86,13 @@ function newSession(key) {
   if (key.includes('-desktop-')) state.os = 'macOS'
   if (key.includes('-channels-')) state.desktop = channelFixture(key.includes('-linux'))
   if (key.includes('-linux')) state.os = 'Linux'
+  // A running app is blocked until the user quits it from the row.
+  if (key.includes('-running')) {
+    const info = state.desktop.installations[0]
+    parked.set(key, info.plan)
+    delete info.plan
+    Object.assign(info, { running: 'running', capability: 'blocked', reason: 'app_running' })
+  }
   const scenario = key.match(/-opencode-(v1|v2|native)$/)?.[1]
   if (scenario) {
     const nativePath = 'C:\\Users\\Local User\\.opencode\\bin\\opencode.exe'
@@ -213,6 +221,27 @@ const handle = async (req, res) => {
       }, 1200)
       return json(res, 202, { id })
     }
+    if (url.pathname === '/api/desktop/stop') {
+      if (state.offline) return json(res, 400, { error: 'offline_read_only' })
+      if (body.revision !== state.revision) return json(res, 409, { error: 'stale_preview' })
+      const info = state.desktop.installations.find(item => item.id === body.installation_id)
+      if (!info || info.running !== 'running') return json(res, 400, { error: 'unsupported_upgrade' })
+      const id = `${Date.now()}-desktop-stop`
+      const task = { id, action: 'stop', status: 'running', started_at: new Date().toISOString(),
+        items: [{ installation_id: info.id, name: info.name, phase: 'stopping' }], logs: [], log_truncated: false }
+      state.desktop_tasks.push(task)
+      state.active_tasks.push(id)
+      broadcast(session, false)
+      setTimeout(() => {
+        task.status = 'completed'
+        task.items[0].phase = 'finished'
+        task.items[0].result = { installation_id: info.id, product_id: info.product_id, name: info.name, outcome: 'stopped', old_version: info.version, new_version: info.version, duration_ms: 400 }
+        Object.assign(info, { running: 'stopped', capability: 'automatic', reason: '', plan: parked.get(key) })
+        state.active_tasks = state.active_tasks.filter(active => active !== id)
+        broadcast(session)
+      }, 800)
+      return json(res, 202, { id })
+    }
     if (url.pathname === '/api/desktop/upgrades') {
       if (state.offline) return json(res, 400, { error: 'offline_read_only' })
       if (body.revision !== state.revision) return json(res, 409, { error: 'stale_preview' })
@@ -224,7 +253,7 @@ const handle = async (req, res) => {
       if (state.desktop_tasks.some(task => state.active_tasks.includes(task.id) && task.items.some(item => installations.some(info => info.id === item.installation_id)))) return json(res, 409, { error: 'busy' })
       const id = `${Date.now()}-desktop-test`
       const task = {
-        id, status: 'running', started_at: new Date().toISOString(),
+        id, action: 'upgrade', status: 'running', started_at: new Date().toISOString(),
         items: installations.map(info => ({ installation_id: info.id, name: info.name, phase: 'upgrading' })),
         logs: [], log_truncated: false,
       }

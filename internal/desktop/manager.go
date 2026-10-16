@@ -168,6 +168,21 @@ func (m *Manager) Execute(confirmed Plan, log func(string, string)) (result Resu
 	if log == nil {
 		log = func(string, string) {}
 	}
+	// Installers often relaunch the app; a finished upgrade leaves it closed.
+	// The version is already verified, so a failed quit only adds a note.
+	defer func() {
+		if result.Outcome != "updated" {
+			return
+		}
+		log("phase", "stopping")
+		after, err := m.Scan(true).Find(confirmed.Installation)
+		if err == nil {
+			err = m.stopApp(after)
+		}
+		if err != nil {
+			result.Message = strings.TrimSpace(result.Message + " Updated, but the app could not be closed automatically: " + err.Error())
+		}
+	}()
 	if err := m.ctx.Err(); err != nil {
 		result.Message = err.Error()
 		return
@@ -195,7 +210,11 @@ func (m *Manager) Execute(confirmed Plan, log func(string, string)) (result Resu
 	switch confirmed.Action {
 	case ActionCommand:
 		result.Command = append([]string(nil), confirmed.Command...)
-		log("phase", "upgrading")
+		if confirmed.RequiresAdmin {
+			log("phase", "needs_elevation")
+		} else {
+			log("phase", "upgrading")
+		}
 		r := runner.WithTimeout(m.runner, 20*time.Minute)
 		streaming := r.(interface {
 			RunStreaming(string, []string, func(string, string)) (string, string, int, error)
@@ -226,6 +245,20 @@ func (m *Manager) Execute(confirmed Plan, log func(string, string)) (result Resu
 		}
 		if code != 0 {
 			result.Message = fmt.Sprintf("The package manager exited %d; authorization may have been refused.", code)
+			return
+		}
+	case ActionPackage:
+		result.Command = append([]string(nil), confirmed.Command...)
+		if outcome, message := m.installPackage(confirmed, log); outcome != "" {
+			result.Outcome, result.Message = outcome, message
+			return
+		}
+	case ActionReplace:
+		if message := m.replaceAppImage(confirmed, log); message != "" {
+			result.Message = message
+			if m.ctx.Err() != nil {
+				result.Outcome = "cancelled"
+			}
 			return
 		}
 	case ActionInstaller:

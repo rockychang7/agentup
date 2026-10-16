@@ -58,7 +58,7 @@
 
 - Windows 10/11：x64、arm64。
 - macOS 13 及以上：Apple Silicon、Intel（以各 App 实际支持为准）。
-- Linux：Debian/Ubuntu 系（DEB/APT）、Fedora/RHEL 系（RPM/DNF），x64、arm64。Arch、Flatpak、Snap、AppImage 不在本轮。
+- Linux：Debian/Ubuntu 系（DEB/APT）、Fedora/RHEL 系（RPM/DNF），x64、arm64。Arch、Flatpak、Snap、AppImage 不在本轮（v0.9.0 已补上 Flatpak、Snap、AppImage，见 desktop-support.md）。
 
 ### 1.3 不做的事
 
@@ -339,7 +339,7 @@ Linux 授权命令规则：
 
 并发：
 
-- CLI 和 Web 界面共用跨进程修改锁。Web 界面里确认的任务排成一个队列，按顺序逐个执行，同一时间只有一个在跑。
+- CLI 和 Web 界面共用跨进程修改锁。v0.9.0 起 Web 界面里的升级点了就开始，不同包管理器可以同时跑。
 - 同一个包管理器串行执行。
 - AgentUp 管不了厂商自带的更新器，所以执行前后都重新核对。发现 App 已被自带更新器升级，就放弃旧计划。
 
@@ -398,6 +398,8 @@ Agent 概览                                         [离线只读] [刷新状�
 - **来源说人话**：npm、Homebrew、MSIX、安装程序、直接安装、APT、RPM、解压版；内部代码（如 `app-bundle`）只在展开详情里显示。
 - **批量升级放在筛选栏右侧**：CLI 和 App 各一个按钮。确认弹窗里可以取消勾选个别项目。行上不再放复选框。
 - **任务页合并**：CLI 任务和桌面 App 任务在同一个列表里，按时间排，每条带 CLI / App 标签。
+
+> v0.9.0 起界面已调整：CLI 和 App 分成两个视图，不再按 Agent 混排；升级任务页取消，进度和结果直接显示在行上。以 desktop-support.md 为准。
 - 后续阶段新增的状态（等待退出、下载中、待验证……）显示在对应行的状态列和任务详情里。
 
 ## 9. 验收清单

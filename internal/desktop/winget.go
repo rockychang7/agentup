@@ -23,6 +23,12 @@ func wingetTargetFor(info Installation) (wingetTarget, bool) {
 	switch {
 	case info.ProductID == "codex.desktop" && info.Source == "msix":
 		return wingetTarget{"9PLM9XGG6VKS", "msstore"}, true
+	// Anthropic's WinGet manifest lists the MSIX package family (matched during discovery)
+	// and the per-user installer by its uninstall key.
+	case info.ProductID == "claude.desktop" && info.Source == "msix":
+		return wingetTarget{"Anthropic.Claude", "winget"}, true
+	case info.ProductID == "claude.desktop" && info.Source == "installer" && info.Scope == "user" && info.PackageID == "AnthropicClaude":
+		return wingetTarget{"Anthropic.Claude", "winget"}, true
 	case info.ProductID == "antigravity.desktop" && info.Source == "installer" &&
 		strings.EqualFold(strings.Trim(info.PackageID, "{}"), antigravityProductCode):
 		return wingetTarget{"Google.Antigravity", "winget"}, true
@@ -141,6 +147,18 @@ func commandFailure(plan Plan, code int, stderr string) (string, string) {
 			return known.outcome, known.message
 		}
 		return "failed", wingetMessage(code)
+	}
+	if name == "pkexec" {
+		switch code {
+		case 126:
+			return "cancelled", "The password prompt was cancelled or refused. Nothing was changed."
+		case 127:
+			return "failed", "No system password prompt could be shown. Run this in a terminal: sudo " + strings.Join(plan.Command[1:], " ")
+		}
+	}
+	if name == "snap" && strings.Contains(stderr, "access denied") {
+		// snapd asks the desktop's authorization agent; without one the refresh is refused.
+		return "failed", "Snap needs administrator authorization and no password prompt appeared. Run this in a terminal: sudo snap " + strings.Join(plan.Command[1:], " ")
 	}
 	return "failed", fmt.Sprintf("Upgrade exited %d: %.4000s", code, strings.TrimSpace(stderr))
 }

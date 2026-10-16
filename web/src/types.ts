@@ -2,7 +2,7 @@ export type ToolName = 'codex' | 'claude-code' | 'opencode' | 'agy'
 export type Check = 'pending' | 'checked' | 'offline' | 'unavailable' | 'failed'
 export type Outcome = 'updated' | 'unchanged' | 'unverified' | 'failed' | 'skipped'
 export type Phase = 'detecting' | 'waiting' | 'upgrading' | 'verifying' | 'finished'
-export type DesktopPhase = Phase | 'checking' | 'needs_elevation' | 'downloading' | 'verifying_package' | 'installing'
+export type DesktopPhase = Phase | 'stopping' | 'checking' | 'needs_elevation' | 'downloading' | 'verifying_package' | 'installing'
 export interface Agent {
   name: ToolName
   installed: boolean
@@ -68,7 +68,7 @@ export interface DesktopPlan {
   scope: string
   arch: string
   channel: string
-  action: 'command' | 'privileged_command' | 'installer' | 'guide'
+  action: 'command' | 'privileged_command' | 'installer' | 'guide' | 'replace' | 'package'
   command?: string[]
   url?: string
   asset?: { url: string; sha512: string; size: number; publisher: string }
@@ -108,7 +108,7 @@ export interface DesktopResult {
   installation_id: string
   product_id: string
   name: string
-  outcome: 'updated' | 'no_update' | 'unchanged' | 'unverified' | 'failed' | 'skipped' | 'handed_off' | 'cancelled'
+  outcome: 'updated' | 'no_update' | 'unchanged' | 'unverified' | 'failed' | 'skipped' | 'handed_off' | 'cancelled' | 'stopped'
   old_version: string
   new_version: string
   message?: string
@@ -118,6 +118,7 @@ export interface DesktopResult {
 }
 export interface DesktopTask {
   id: string
+  action?: 'upgrade' | 'stop'
   status: 'queued' | 'running' | 'completed' | 'failed' | 'handed_off'
   started_at: string
   finished_at?: string

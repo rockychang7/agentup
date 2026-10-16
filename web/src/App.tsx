@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Activity, ArrowRight, ArrowUpRight, CircleAlert, CircleCheck, Globe2, LayoutGrid, ListChecks, LoaderCircle, Moon, RefreshCw,
+  Activity, ArrowUpRight, CircleAlert, Globe2, LayoutGrid, LoaderCircle, Moon, RefreshCw,
   Power, ShieldCheck, Sun, Terminal, Unplug, X,
 } from 'lucide-react'
 import { APIError, request, useSession } from './api'
@@ -9,31 +9,26 @@ import type { Dictionary, Language } from './i18n'
 import { Overview } from './Overview'
 import type { KindFilter } from './Overview'
 import { preference, remember } from './preferences'
-import { TaskCenter } from './Tasks'
 import { toolLabels } from './types'
 import type { Doctor } from './types'
 import { Badge, CopyButton, IconButton, displayVersion } from './ui'
 
-type Page = 'agents' | 'tasks' | 'doctor'
+type Page = 'agents' | 'doctor'
 
 export function App() {
   const { state, connection, sessionError, reconnect, markStopped } = useSession()
   const [language, setLanguage] = useState<Language>(initialLanguage)
   const [theme, setTheme] = useState(() => preference('theme') === 'light' ? 'light' : 'dark')
   const [page, setPage] = useState<Page>('agents')
-  const [kind, setKind] = useState<KindFilter>(() => {
-    const stored = preference('kind')
-    return stored === 'cli' || stored === 'desktop' ? stored : 'all'
-  })
+  const [kind, setKind] = useState<KindFilter>(() => preference('kind') === 'desktop' ? 'desktop' : 'cli')
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [stopConfirmation, setStopConfirmation] = useState(false)
   const t = dictionaries[language]
   const active = state?.active_tasks.length || 0
-  // Refresh and diagnosis replace shared state, so they wait for queued upgrades.
+  // Refresh and diagnosis replace shared state, so they wait for running upgrades.
   const busy = !state || state.scanning || state.diagnosing || !!active || submitting || connection !== 'connected'
-  // Upgrades only wait for scans: new tasks join the queue behind running ones.
+  // Upgrades only wait for scans; other rows can start while one is upgrading.
   const locked = !state || state.scanning || state.diagnosing || state.offline || submitting || connection !== 'connected'
   useEffect(() => {
     remember('language', language)
@@ -44,11 +39,6 @@ export function App() {
     document.documentElement.dataset.theme = theme
   }, [theme])
   useEffect(() => { remember('kind', kind) }, [kind])
-  useEffect(() => {
-    if (!notice) return
-    const timer = setTimeout(() => setNotice(''), 6000)
-    return () => clearTimeout(timer)
-  }, [notice])
   const errorText = (code: string) => t[code as keyof Dictionary] || t.request_failed
 
   async function act(path: string, body: unknown, done?: () => void) {
@@ -61,7 +51,6 @@ export function App() {
       setError(err instanceof APIError ? err.message : 'request_failed')
     } finally { setSubmitting(false) }
   }
-  const queued = (names: string) => setNotice(names)
 
   return <div className="app-shell">
     <header className="topbar">
@@ -69,9 +58,9 @@ export function App() {
         <div className="brand"><span className="brand-symbol"><ArrowUpRight size={18} /></span><span>AgentUp</span>{state?.version && <span className="brand-version mono">{state.version}</span>}</div>
         <nav className="tabs" aria-label="AgentUp">
           {([
-            ['agents', LayoutGrid], ['tasks', ListChecks], ['doctor', Activity],
+            ['agents', LayoutGrid], ['doctor', Activity],
           ] as const).map(([key, Icon]) => <button type="button" key={key} className="tab" aria-current={page === key ? 'page' : undefined} onClick={() => setPage(key)}>
-            <Icon size={16} /><span>{t[key]}</span>{key === 'tasks' && !!active && <span className="tab-count" aria-hidden="true">{active}</span>}
+            <Icon size={16} /><span>{t[key]}</span>
           </button>)}
         </nav>
         <div className="topbar-actions">
@@ -92,7 +81,7 @@ export function App() {
         <div className="page-heading">
           <div>
             <h1>{t[page]}</h1>
-            <p className="page-intro">{page === 'agents' ? <>{state.os}<span className="divider">·</span><span className="mono">{state.arch}</span><span className="divider">·</span>{t.agentsIntro}</> : page === 'tasks' ? t.tasksIntro : t.doctorIntro}</p>
+            <p className="page-intro">{page === 'agents' ? <>{state.os}<span className="divider">·</span><span className="mono">{state.arch}</span><span className="divider">·</span>{t.agentsIntro}</> : t.doctorIntro}</p>
           </div>
           <div className="heading-actions">
             {page === 'agents' && <><label className="offline-toggle" title={t.offlineHint}><input type="checkbox" role="switch" checked={state.offline} disabled={busy} onChange={e => void act('refresh', { offline: e.target.checked })} /><span className="switch-track" /><span>{t.offline}</span></label><button className="button secondary" disabled={busy} title={active ? t.refreshBlocked : undefined} onClick={() => void act('refresh', { offline: state.offline })}><RefreshCw className={state.scanning ? 'spin' : ''} size={15} /><span>{state.scanning ? t.scanning : t.refresh}</span></button></>}
@@ -100,18 +89,13 @@ export function App() {
           </div>
         </div>
         {page === 'agents' && <Overview state={state} t={t} locked={locked} submitting={submitting} kind={kind} setKind={setKind} onError={setError}
-          onUpgradeCli={(tools, done) => void act('upgrades', { tools, revision: state.revision }, () => { done(); queued(tools.map(name => `${toolLabels[name]} CLI`).join(t.listSeparator)) })}
-          onRunDesktop={(plans, revision, names, done) => void act('desktop/upgrades', { plans, revision }, () => { done(); queued(names.join(t.listSeparator)) })} />}
-        {page === 'tasks' && <TaskCenter tasks={state.tasks} desktopTasks={state.desktop_tasks || []} t={t} language={language} onError={setError} />}
+          onUpgradeCli={(tools, done) => void act('upgrades', { tools, revision: state.revision }, done)}
+          onRunDesktop={(plans, revision, done) => void act('desktop/upgrades', { plans, revision }, done)}
+          onStopDesktop={(installation, revision, done) => void act('desktop/stop', { installation_id: installation, revision }, done)} />}
         {page === 'doctor' && <DoctorView doctor={state.doctor} diagnosing={state.diagnosing} t={t} onError={setError} />}
         <footer><span><ShieldCheck size={13} />{state.offline ? t.readOnly : t.local} · 127.0.0.1</span><span>AgentUp <span className="mono">{state.version}</span></span></footer>
       </>}
     </main>
-    {notice && page !== 'tasks' && <div className="toast" role="status">
-      <CircleCheck size={17} /><span><strong>{t.queuedToast}</strong>{notice}</span>
-      <button type="button" className="text-button" onClick={() => { setNotice(''); setPage('tasks') }}>{t.viewTasks}<ArrowRight size={14} /></button>
-      <IconButton label={t.dismiss} onClick={() => setNotice('')}><X /></IconButton>
-    </div>}
     {connection !== 'stopped' && stopConfirmation && <StopConfirmation t={t} submitting={submitting} disabled={!!active || connection !== 'connected' || submitting} onCancel={() => setStopConfirmation(false)} onConfirm={() => void act('shutdown', {}, () => { setStopConfirmation(false); markStopped() })} />}
   </div>
 }

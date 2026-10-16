@@ -18,6 +18,7 @@ type fakeDesktop struct {
 	executed []desktop.Plan
 	log      string
 	gate     <-chan struct{}
+	stopped  []string
 }
 
 func (f *fakeDesktop) Scan(bool) desktop.Snapshot { return f.snapshot }
@@ -37,6 +38,18 @@ func (f *fakeDesktop) Execute(plan desktop.Plan, log func(string, string)) deskt
 		Installation: plan.Installation, ProductID: plan.ProductID, Outcome: "handed_off",
 		OldVersion: plan.BeforeVersion, URL: plan.URL,
 	}
+}
+
+func (f *fakeDesktop) Stop(info desktop.Installation) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopped = append(f.stopped, info.ID)
+	for i := range f.snapshot.Installations {
+		if f.snapshot.Installations[i].ID == info.ID {
+			f.snapshot.Installations[i].Running = "stopped"
+		}
+	}
+	return nil
 }
 
 func desktopServiceFixture(t *testing.T) (*Service, *fakeDesktop) {
@@ -151,7 +164,7 @@ func TestDesktopTaskProtectsShutdownAndOtherOperations(t *testing.T) {
 	waitState(t, s, func(state State) bool { return len(state.ActiveTasks) == 0 && !state.Scanning })
 }
 
-func TestQueuedTasksRunInOrderWhileOthersStayAvailable(t *testing.T) {
+func TestIndependentDesktopUpgradesStartImmediately(t *testing.T) {
 	s, backend := desktopServiceFixture(t)
 	second := backend.snapshot.Installations[0]
 	second.ID, second.Name = "second-installation", "Second app"
@@ -162,36 +175,57 @@ func TestQueuedTasksRunInOrderWhileOthersStayAvailable(t *testing.T) {
 	s.state.Desktop = backend.snapshot
 	gate := make(chan struct{})
 	backend.gate = gate
-	first, err := s.UpgradeDesktops([]string{"trusted-plan"}, 42)
-	if err != nil {
+	if _, err := s.UpgradeDesktops([]string{"trusted-plan"}, 42); err != nil {
 		close(gate)
 		t.Fatal(err)
 	}
-	// Log lines and phases from the running task must not invalidate the next confirmation.
+	// Log lines and phases from the running task must not invalidate the next click.
 	revision := s.Snapshot().Revision
 	if _, err := s.UpgradeDesktops([]string{"trusted-plan"}, revision); err != ErrBusy {
 		close(gate)
-		t.Fatalf("the same installation was queued twice: %v", err)
+		t.Fatalf("the same installation was started twice: %v", err)
 	}
-	next, err := s.UpgradeDesktops([]string{"second-plan"}, revision)
-	if err != nil {
+	if _, err := s.UpgradeDesktops([]string{"second-plan"}, revision); err != nil {
 		close(gate)
 		t.Fatal("a running task blocked another installation:", err)
 	}
 	state := s.Snapshot()
-	if len(state.ActiveTasks) != 2 || state.ActiveTasks[0] != first || state.ActiveTasks[1] != next ||
-		state.DesktopTasks[1].Status != "queued" {
+	if len(state.ActiveTasks) != 2 || state.DesktopTasks[0].Status != "running" || state.DesktopTasks[1].Status != "running" {
 		close(gate)
-		t.Fatalf("second task was not queued behind the first: %+v", state)
+		t.Fatalf("upgrades did not start right away: %+v", state)
 	}
 	close(gate)
 	state = waitState(t, s, func(state State) bool { return len(state.ActiveTasks) == 0 })
-	if len(backend.executed) != 2 || backend.executed[0].ID != "trusted-plan" || backend.executed[1].ID != "second-plan" {
-		t.Fatalf("queued plans did not run in order: %+v", backend.executed)
+	if len(backend.executed) != 2 {
+		t.Fatalf("both plans should run: %+v", backend.executed)
 	}
 	for _, task := range state.DesktopTasks {
 		if task.Status != "handed_off" {
-			t.Fatalf("queued task did not finish: %+v", task)
+			t.Fatalf("task did not finish: %+v", task)
 		}
+	}
+}
+
+func TestStopDesktopQuitsOnlyARunningApp(t *testing.T) {
+	s, backend := desktopServiceFixture(t)
+	if _, err := s.StopDesktop("sample-installation", 42); err != ErrUnsupported {
+		t.Fatalf("an app that is not running was stopped: %v", err)
+	}
+	backend.snapshot.Installations[0].Running = "running"
+	s.state.Desktop = backend.snapshot
+	if _, err := s.StopDesktop("sample-installation", 41); err != ErrStale {
+		t.Fatalf("stale revision was accepted: %v", err)
+	}
+	id, err := s.StopDesktop("sample-installation", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := waitState(t, s, func(state State) bool { return len(state.ActiveTasks) == 0 })
+	task := state.DesktopTasks[0]
+	if task.ID != id || task.Action != "stop" || task.Status != "completed" || task.Items[0].Result.Outcome != "stopped" {
+		t.Fatalf("stop was not recorded: %+v", task)
+	}
+	if len(backend.stopped) != 1 || state.Desktop.Installations[0].Running != "stopped" {
+		t.Fatalf("app was not stopped and rescanned: %v %+v", backend.stopped, state.Desktop.Installations[0])
 	}
 }

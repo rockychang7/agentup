@@ -301,7 +301,7 @@ func TestOpenCodeInstallerIsVerifiedBeforeItOpens(t *testing.T) {
 	if result.Outcome != "updated" || result.NewVersion != "2.0.29" {
 		t.Fatalf("installer flow did not verify the new version: %+v", result)
 	}
-	if strings.Join(phases, ",") != "checking,downloading,verifying_package,installing,verifying" {
+	if strings.Join(phases, ",") != "checking,downloading,verifying_package,installing,verifying,stopping" {
 		t.Fatalf("unexpected phases: %v", phases)
 	}
 	if entries, _ := os.ReadDir(f.m.receiptDir); len(entries) != 0 {

@@ -41,18 +41,20 @@ Web 界面：
 agentup ui
 ```
 
-“Agent 概览”按 Agent 分组：每个 Agent 下面一行 CLI（青色 `CLI` 标签）、一行桌面 App（紫色 `App` 标签），可以切换“CLI + App / 只看 CLI / 只看 App”。顶部一条汇总显示已安装、可更新、需手动处理和进行中的数量；筛选栏右侧有“批量升级 CLI”“批量升级 App”两个按钮，确认弹窗里可以取消勾选个别项目。确认后留在当前页面，对应的行直接显示“排队中 / 正在升级”，其他行照常可以点升级；已确认是最新版的行，升级按钮置灰。桌面 App 的展开详情里有安装路径、包标识、安装范围、架构、通道、运行状态和升级计划。“升级任务”页把 CLI 任务和桌面 App 任务合在一个列表里。
+“Agent 概览”分“命令行 CLI”和“桌面 App”两个视图，两类从不混在一起显示。顶部汇总只统计当前视图的已安装、可更新、需手动处理和进行中的数量。单行点“升级”直接开始，按钮原地变成进度（同一个包管理器正忙时显示“等待中”）；“批量升级”和需要打开安装窗口的升级先弹确认。结果留在那一行：状态下方一句话，展开详情看原因和命令输出。没有单独的升级任务页。
+
+桌面 App 正在运行时，那一行的按钮变成“退出应用”，确认后 AgentUp 关掉它，再点升级。升级成功后应用保持关闭，不会替你重新打开。
 
 ## 2. 现在每个格子能做什么
 
-升级方式分五级：**自动升级**（AgentUp 执行命令）、**交互安装**（AgentUp 下载校验，你在安装窗口里点完）、**授权命令**（需要 sudo，只在命令行里执行）、**引导更新**（只给官方入口）、**不可用**（显示原因）。
+升级方式分五级：**自动升级**（AgentUp 执行命令；需要管理员权限的会弹出系统自己的密码框）、**交互安装**（AgentUp 下载校验，你在安装窗口里点完）、**授权命令**（需要 sudo，只在命令行里执行）、**引导更新**（只给官方入口）、**不可用**（显示原因）。
 
 | App | Windows | macOS | Linux |
 | --- | --- | --- | --- |
-| ChatGPT / Codex | MSIX 按包族识别；WinGet `msstore` 核对；**自动**（`winget upgrade`），需单独确认、不进批量 | Homebrew Cask `chatgpt` 装的：**自动**；直接装的：引导 + 参考版本 | DEB/RPM；APT/DNF 本机缓存查最新版本；**授权命令** |
-| Claude | MSIX 按包族、EXE 按发布者识别；引导 | 同上，Cask `claude` | DEB `claude-desktop`；APT 查最新版本；**授权命令** |
-| OpenCode | 读主程序架构；v2：官方清单 + **交互安装**；v1：WinGet **自动** | 同上，Cask `opencode-desktop` | DEB/RPM；官方清单查最新版本；引导 |
-| Antigravity | 只认 2.x；ProductCode + WinGet 核对；**自动** | 同上，Cask `antigravity`，只认 2.x | 固定目录或 `.desktop` 启动项找解压目录；引导 |
+| ChatGPT / Codex | MSIX 按包族识别；WinGet `msstore` 核对；**自动**（`winget upgrade`），需单独确认、不进批量 | Homebrew Cask `chatgpt` 装的：**自动**；直接装的：引导 + 参考版本 | DEB/RPM；APT/DNF 本机缓存查最新版本；有 `pkexec` 时 **自动**（弹系统密码框），否则 **授权命令** |
+| Claude | MSIX 按包族、EXE 按卸载键 `AnthropicClaude`（当前用户）识别；WinGet `Anthropic.Claude` **自动** | 同上，Cask `claude` | DEB `claude-desktop`；APT 查最新版本；有 `pkexec` 时 **自动**（弹系统密码框），否则 **授权命令** |
+| OpenCode | 读主程序架构；v2：官方清单 + **交互安装**；v1：WinGet **自动** | 同上，Cask `opencode-desktop` | DEB/RPM：官方清单查最新版本；有 `pkexec` 时 **自动**（下载官方 .deb/.rpm、核对大小和 SHA-512，弹系统密码框后用 apt-get/dnf 安装），没有时引导；Flatpak `ai.opencode.opencode`：**自动**（`flatpak update`）；官方 AppImage（用户目录内）：**自动**，下载校验后原地替换 |
+| Antigravity | 只认 2.x；ProductCode + WinGet 核对；**自动** | 同上，Cask `antigravity`，只认 2.x | 解压版：固定目录或 `.desktop` 启动项找解压目录，引导；Snap `antigravity`（Canonical 已认证发布）：**自动**（`snap refresh`，可能弹系统密码框） |
 
 **升级渠道**：上表里加粗的升级方式全部默认开启（2026-10-15 起取消了“真机验收前默认关闭”的开关，`AGENTUP_DESKTOP_CHANNELS` 不再需要）。已真机验收的是 Windows WinGet Antigravity（2.18.1 → 2.23.1），其他格子目前只有模拟测试，遇到问题按任务里的原始输出排查。
 
@@ -81,12 +83,15 @@ Homebrew 的认领规则：
 - Windows 只查当前用户的 MSIX；卸载记录查当前用户和系统两处。
 - macOS 只查系统和当前用户的 Applications 目录，不扫整个磁盘或外接盘。
 - Linux 通过 `/proc/*/exe` 判断 App 是否在运行；读不了进程表就显示“未知”，不执行升级。DEB 和 RPM 都查。
-- Linux 的 Antigravity 解压版只认 `~/.local/share/antigravity`、`/opt/Antigravity` 和 `.desktop` 启动项指向的目录；ASAR 打包、AppImage、Flatpak、Snap 和 Arch 安装暂不识别。
+- Linux 的 Antigravity 解压版只认 `~/.local/share/antigravity`、`/opt/Antigravity` 和 `.desktop` 启动项指向的目录；ASAR 打包和 Arch 安装暂不识别。
+- Linux 的 APT/DNF 升级在网页里通过 `pkexec` 执行：系统弹出自己的密码框，AgentUp 碰不到密码。取消密码框记为“已取消”，什么都不改；桌面没有授权程序（比如远程 SSH 会话）时提示改在终端用 sudo 执行。命令行 `agentup upgrade` 仍然用 sudo 在当前终端里输密码。
+- Flatpak 和 Snap 只认表里写的包名，Snap 还要求发布者是已认证的那一个。Claude、ChatGPT 在 Snap 商店里的同名包都是第三方套壳，不接管。
+- AppImage 只认 OpenCode：在 `~/Applications`、`~/AppImages`、`~/.local/bin`、`~/Downloads`、`/opt` 和启动项指向的位置找文件名含 `opencode` 的 AppImage，再读包内启动项确认名字是 OpenCode、取 `X-AppImage-Version`（只运行 AppImage 自带的解包程序，不启动应用；结果按文件大小和修改时间缓存）。升级时从官方清单下载，核对大小和 SHA-512，先写到同目录临时文件再整体替换，保留原文件名和权限。用户目录以外的 AppImage 只给入口。
 - 检测失败会报告问题并显示“检测未完成”，不当成“未安装”。
 - “最新版本未知”“没检查”“查询失败”和“已是最新”严格分开。
 - 候选版本来自包管理器的本机缓存，可能落后。检测时不会偷偷运行 `brew update`、`apt update` 或系统升级。
 - Debian 包版本保留 epoch 和修订号，用 `dpkg --compare-versions` 比较，不截断。
-- 界面上写“渠道候选版本”，不把包管理器缓存等同于厂商的全球最新版本。
+- 界面上统一写“已是最新”；最新版本号具体来自哪个渠道（可能比厂商官网慢一点）写在详情的“版本来源”里。
 
 ## 4. 安全与结果
 

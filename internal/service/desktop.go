@@ -10,6 +10,96 @@ import (
 type desktopBackend interface {
 	Scan(bool) desktop.Snapshot
 	Execute(desktop.Plan, func(string, string)) desktop.Result
+	Stop(desktop.Installation) error
+}
+
+func desktopResource(plan desktop.Plan) string {
+	if plan.Action == desktop.ActionInstaller || plan.Action == desktop.ActionGuide || plan.Action == desktop.ActionReplace {
+		return "app:" + plan.Installation
+	}
+	switch plan.Source {
+	case "brew-cask":
+		return "brew"
+	case "msix", "installer":
+		return "winget"
+	}
+	return plan.Source
+}
+
+// StopDesktop quits one running app on request, so the user can upgrade it next.
+// It runs like an upgrade task, so the row shows progress and other rows stay usable.
+func (s *Service) StopDesktop(installation string, revision uint64) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.busyLocked() {
+		return "", ErrBusy
+	}
+	if s.state.Offline {
+		return "", ErrOffline
+	}
+	if revision != s.state.Revision {
+		return "", ErrStale
+	}
+	info, err := s.state.Desktop.Find(installation)
+	if err != nil || !info.Installed || info.Running != "running" {
+		return "", ErrUnsupported
+	}
+	if s.activeLocked(info.ID) {
+		return "", ErrBusy
+	}
+	task := DesktopTask{
+		ID:     fmt.Sprintf("desktop-stop-%d-%d", time.Now().UnixNano(), revision),
+		Action: "stop", Status: "running", StartedAt: time.Now(),
+		Items: []DesktopTaskItem{{Installation: info.ID, Name: info.Name, Phase: "stopping"}}, Logs: []DesktopLog{},
+	}
+	if err := s.startLocked(task.ID, func() { s.runDesktopStop(task.ID, info) }); err != nil {
+		return "", err
+	}
+	s.state.DesktopTasks = trimHistory(s.state.DesktopTasks, func(t DesktopTask) string { return t.ID }, s.isActiveLocked)
+	s.state.DesktopTasks = append(s.state.DesktopTasks, task)
+	s.changedLocked()
+	return task.ID, nil
+}
+
+func (s *Service) runDesktopStop(id string, info desktop.Installation) {
+	started := time.Now()
+	lock := s.resourceLock("app:" + info.ID)
+	lock.Lock()
+	err := s.desktopManager.Stop(info)
+	lock.Unlock()
+	result := desktop.Result{
+		Installation: info.ID, ProductID: info.ProductID, Name: info.Name, Outcome: "stopped",
+		OldVersion: info.Version, NewVersion: info.Version, DurationMS: time.Since(started).Milliseconds(),
+	}
+	status := "completed"
+	if err != nil {
+		result.Outcome, result.Message, status = "failed", tail(clean(err.Error()), 8<<10), "failed"
+	}
+	s.mu.Lock()
+	if task := s.desktopTaskLocked(id); task != nil {
+		finished := time.Now()
+		task.Status, task.FinishedAt = status, &finished
+		task.Items[0].Phase, task.Items[0].Result = "finished", &result
+	}
+	offline := s.state.Offline
+	s.changedLocked()
+	s.mu.Unlock()
+	s.refreshDesktop(offline)
+	s.mu.Lock()
+	s.finishLocked(id)
+	s.mu.Unlock()
+}
+
+// refreshDesktop replaces only the desktop snapshot; CLI rows are untouched.
+func (s *Service) refreshDesktop(offline bool) {
+	if s.ctx.Err() != nil {
+		return
+	}
+	snapshot := s.desktopManager.Scan(offline)
+	s.mu.Lock()
+	s.state.Desktop = snapshot
+	s.changedLocked()
+	s.mu.Unlock()
 }
 
 type DesktopTaskItem struct {
@@ -27,6 +117,7 @@ type DesktopLog struct {
 
 type DesktopTask struct {
 	ID           string            `json:"id"`
+	Action       string            `json:"action"` // upgrade or stop
 	Status       string            `json:"status"`
 	StartedAt    time.Time         `json:"started_at"`
 	FinishedAt   *time.Time        `json:"finished_at,omitempty"`
@@ -60,7 +151,7 @@ func (s *Service) UpgradeDesktops(planIDs []string, revision uint64) (string, er
 	plans := []desktop.Plan{}
 	task := DesktopTask{
 		ID:     fmt.Sprintf("desktop-%d-%d", time.Now().UnixNano(), revision),
-		Status: "running", StartedAt: time.Now(),
+		Action: "upgrade", Status: "running", StartedAt: time.Now(),
 		Items: []DesktopTaskItem{}, Logs: []DesktopLog{},
 	}
 	for _, id := range planIDs {
@@ -91,8 +182,7 @@ func (s *Service) UpgradeDesktops(planIDs []string, revision uint64) (string, er
 			return "", ErrBusy
 		}
 	}
-	task.Status = "queued"
-	if err := s.enqueueLocked(task.ID, func() { s.runDesktopUpgrade(task.ID, plans) }); err != nil {
+	if err := s.startLocked(task.ID, func() { s.runDesktopUpgrade(task.ID, plans) }); err != nil {
 		return "", err
 	}
 	s.state.DesktopTasks = trimHistory(s.state.DesktopTasks, func(t DesktopTask) string { return t.ID }, s.isActiveLocked)
@@ -122,7 +212,9 @@ func (s *Service) runDesktopUpgrade(id string, plans []desktop.Plan) {
 	}
 	update(func(task *DesktopTask) { task.Status, task.StartedAt = "running", time.Now() })
 	for index, plan := range plans {
-		update(func(task *DesktopTask) { task.Items[index].Phase = "upgrading" })
+		update(func(task *DesktopTask) { task.Items[index].Phase = "waiting" })
+		lock := s.resourceLock(desktopResource(plan))
+		lock.Lock()
 		result := s.desktopManager.Execute(plan, func(stream, text string) {
 			update(func(task *DesktopTask) {
 				if stream == "phase" {
@@ -147,6 +239,7 @@ func (s *Service) runDesktopUpgrade(id string, plans []desktop.Plan) {
 				}
 			})
 		})
+		lock.Unlock()
 		result.Message = tail(clean(result.Message), 8<<10)
 		update(func(task *DesktopTask) { task.Items[index].Phase, task.Items[index].Result = "finished", &result })
 	}
@@ -155,7 +248,7 @@ func (s *Service) runDesktopUpgrade(id string, plans []desktop.Plan) {
 		finished := time.Now()
 		task.FinishedAt = &finished
 		for _, item := range task.Items {
-			if item.Result == nil || item.Result.Outcome == "failed" || item.Result.Outcome == "unverified" {
+			if item.Result == nil || item.Result.Outcome == "failed" || item.Result.Outcome == "unverified" || item.Result.Outcome == "cancelled" {
 				task.Status = "failed"
 				break
 			}
@@ -167,14 +260,7 @@ func (s *Service) runDesktopUpgrade(id string, plans []desktop.Plan) {
 	s.mu.Lock()
 	offline := s.state.Offline
 	s.mu.Unlock()
-	// Desktop discovery replaces only the desktop snapshot; CLI rows are untouched.
-	if s.ctx.Err() == nil {
-		snapshot := s.desktopManager.Scan(offline)
-		s.mu.Lock()
-		s.state.Desktop = snapshot
-		s.changedLocked()
-		s.mu.Unlock()
-	}
+	s.refreshDesktop(offline)
 	s.mu.Lock()
 	s.finishLocked(id)
 	s.mu.Unlock()

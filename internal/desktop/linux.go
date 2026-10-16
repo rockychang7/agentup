@@ -32,6 +32,9 @@ func (m *Manager) scanLinux(snapshot *Snapshot, offline bool) {
 	// Portable Antigravity is intentionally read-only. No old IDE repositories
 	// or arbitrary directories are taken over by the updater.
 	m.scanLinuxAntigravity(snapshot)
+	m.scanFlatpak(snapshot, offline)
+	m.scanSnap(snapshot, offline)
+	m.scanAppImages(snapshot, offline)
 }
 
 // packageFiles returns the files owned by a package and its desktop entry.
@@ -150,9 +153,58 @@ func (m *Manager) aptCandidate(info *Installation, pkg string) {
 	}
 	info.LatestCheck, info.UpgradeAvailable = model.CheckOK, cmp < 0
 	if info.UpgradeAvailable {
-		info.Capability, info.Reason = Privileged, ""
-		info.spec = planSpec{command: []string{"sudo", "apt-get", "install", "--only-upgrade", pkg}}
+		m.elevate(info, []string{"apt-get", "install", "--only-upgrade", pkg},
+			[]string{m.lookPath("env"), "DEBIAN_FRONTEND=noninteractive", m.lookPath("apt-get"), "install", "--only-upgrade", "-y", pkg})
 	}
+}
+
+// elevate runs package-manager upgrades through pkexec from the Web UI, so the
+// desktop shows its own password prompt. The terminal CLI keeps sudo, and without
+// pkexec the command is only copied for a terminal.
+func (m *Manager) elevate(info *Installation, sudo, pkexecArgs []string) {
+	if pkexec, err := m.runner.LookPath("pkexec"); err == nil && !m.terminal {
+		info.Capability, info.Reason = Automatic, ""
+		info.spec = planSpec{command: append([]string{pkexec}, pkexecArgs...), admin: true}
+		return
+	}
+	info.Capability, info.Reason = Privileged, ""
+	info.spec = planSpec{command: append([]string{"sudo"}, sudo...)}
+}
+
+// elevatePackage installs a verified local .deb or .rpm with the system package manager,
+// so dependencies and the package database stay consistent. The Web UI needs pkexec;
+// the terminal CLI uses sudo. Without either, only the official entry is offered.
+func (m *Manager) elevatePackage(info *Installation) {
+	install := []string{m.lookPath("env"), "DEBIAN_FRONTEND=noninteractive", m.lookPath("apt-get"), "install", "-y"}
+	if info.Source == "rpm" {
+		install = []string{m.lookPath("dnf"), "install", "-y"}
+	}
+	switch pkexec, err := m.runner.LookPath("pkexec"); {
+	case m.terminal:
+		info.Capability = Privileged
+		info.spec.install = append([]string{"sudo"}, install...)
+	case err == nil:
+		info.Capability = Automatic
+		info.spec.install, info.spec.admin = append([]string{pkexec}, install...), true
+	default:
+		info.Capability, info.Reason, info.spec = Guided, "package_manager_authorization", planSpec{}
+	}
+}
+
+// upstreamVersion drops a Debian or RPM epoch and release from a package version.
+func upstreamVersion(version string) string {
+	if _, rest, ok := strings.Cut(version, ":"); ok {
+		version = rest
+	}
+	upstream, _, _ := strings.Cut(version, "-")
+	return upstream
+}
+
+func (m *Manager) lookPath(name string) string {
+	if path, err := m.runner.LookPath(name); err == nil {
+		return path
+	}
+	return name
 }
 
 func (m *Manager) scanRPM(snapshot *Snapshot, offline bool) {
@@ -225,8 +277,7 @@ func (m *Manager) dnfCandidate(info *Installation, pkg string) {
 	info.Capability, info.Reason = Guided, "package_manager_authorization"
 	info.UpgradeAvailable = rpmCompare(info.Version, latest) < 0
 	if info.UpgradeAvailable {
-		info.Capability, info.Reason = Privileged, ""
-		info.spec = planSpec{command: []string{"sudo", "dnf", "upgrade", pkg}}
+		m.elevate(info, []string{"dnf", "upgrade", pkg}, []string{dnf, "upgrade", "-y", pkg})
 	}
 }
 

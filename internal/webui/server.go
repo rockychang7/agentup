@@ -165,6 +165,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.reply(w, http.StatusAccepted, map[string]string{"id": id})
+	case r.URL.Path == "/api/desktop/stop" && r.Method == http.MethodPost:
+		var input struct {
+			Installation string  `json:"installation_id"`
+			Revision     *uint64 `json:"revision"`
+		}
+		if !s.decode(w, r, &input) {
+			return
+		}
+		if input.Revision == nil || input.Installation == "" {
+			s.fail(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		id, err := s.service.StopDesktop(input.Installation, *input.Revision)
+		if err != nil {
+			s.operation(w, err)
+			return
+		}
+		s.reply(w, http.StatusAccepted, map[string]string{"id": id})
 	case r.URL.Path == "/api/desktop/upgrades" && r.Method == http.MethodPost:
 		var input struct {
 			Plans    []string `json:"plans"`

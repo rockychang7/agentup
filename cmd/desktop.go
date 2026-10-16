@@ -169,6 +169,12 @@ func runDesktopUpgrade(cmd *cobra.Command, args []string) error {
 					}
 				case desktop.ActionPrivileged:
 					p.Line("  Fully quit the app. Runs in this terminal and asks for your password: " + strings.Join(info.Plan.Command, " "))
+				case desktop.ActionReplace:
+					p.Line("  Fully quit the app. Downloads " + info.Plan.Asset.URL)
+					p.Line("  Checks size and SHA-512, then replaces " + info.Plan.Path + " in place.")
+				case desktop.ActionPackage:
+					p.Line("  Fully quit the app. Downloads " + info.Plan.Asset.URL)
+					p.Line("  Checks size and SHA-512, then installs it with: " + strings.Join(info.Plan.Command, " ") + " <package>")
 				case desktop.ActionInstaller:
 					p.Line("  Fully quit the app. Downloads and verifies " + info.Plan.Asset.URL)
 					p.Line("  Checks size, SHA-512 and the publisher signature (" + info.Plan.Asset.Publisher + "), then opens the installer for you to complete.")
