@@ -15,7 +15,7 @@ func setupOpenCodeNpm(mr *runner.MockRunner, version, pkg string) {
 	mr.SetResult("npm", []string{"--version"}, runner.MockResult{Stdout: "10.0.0"})
 	mr.SetResult("npm", []string{"list", "-g", pkg, "--depth=0"}, runner.MockResult{Stdout: pkg + "@" + version})
 	mr.SetResult("npm", []string{"view", pkg, "version"}, runner.MockResult{Stdout: version})
-	mr.SetResult("npm", []string{"install", "-g", pkg + "@latest"}, runner.MockResult{})
+	mr.SetResult("npm", []string{"install", "-g", "--include=optional", "--ignore-scripts=false", pkg + "@latest"}, runner.MockResult{})
 }
 
 func TestOpenCodePreviewMatchesReleaseLine(t *testing.T) {
@@ -40,7 +40,7 @@ func TestOpenCodePreviewMatchesReleaseLine(t *testing.T) {
 			var want []string
 			if tt.pkg != "" {
 				setupOpenCodeNpm(mr, tt.version, tt.pkg)
-				want = []string{"npm", "install", "-g", tt.pkg + "@latest"}
+				want = []string{"npm", "install", "-g", "--include=optional", "--ignore-scripts=false", tt.pkg + "@latest"}
 			} else {
 				if tt.native {
 					home := t.TempDir()
@@ -89,7 +89,7 @@ func TestOpenCodeServiceUsesConfirmedPackage(t *testing.T) {
 				return !state.Scanning && len(state.ActiveTasks) == 0 && len(state.Tasks) > 0
 			})
 			result := state.Tasks[0].Tools[0].Result
-			want := []string{"npm", "install", "-g", tt.pkg + "@latest"}
+			want := []string{"npm", "install", "-g", "--include=optional", "--ignore-scripts=false", tt.pkg + "@latest"}
 			if state.Tasks[0].Status != "completed" || result == nil || !reflect.DeepEqual(result.Command, want) {
 				t.Fatalf("incorrect service upgrade: %+v", state.Tasks[0])
 			}

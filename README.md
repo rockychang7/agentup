@@ -36,7 +36,11 @@
 
 OpenCode 仍作为一个工具管理，优先检测 PATH 中的 `opencode`，不存在时才检测 `opencode2`；不会枚举或分别升级所有共存安装。根据本机版本选择 v1/v2 对应的包名、最新版查询和升级命令，普通 `agentup upgrade opencode` 只更新当前版本线，不执行 v1→v2 迁移。
 
-v2 的 pnpm 升级带 `--allow-build=@opencode/cli`，允许官方必需的 postinstall 脚本。官方 `~/.opencode/bin/opencode`（Windows 为 `.exe`）安装支持 `opencode upgrade --method curl` 自升级，最新版通过对应版本线的 npm registry 元数据查询，不要求安装 Node.js。其他独立二进制、无法识别的版本和预发布版本不自动升级。
+Claude Code 和 OpenCode 的 npm 升级显式包含原生可选依赖并启用 postinstall；npm 12（以及支持脚本授权的 npm 11）额外带 `--allow-scripts=<官方包名>`，只授权当前工具，不修改全局安全配置。pnpm 升级也显式启用脚本和可选依赖；pnpm 10+ 检查并使用 `--allow-build=<官方包名>` 授权构建，不支持该参数时会在安装前停止并提示更新 pnpm；pnpm 9 不传该参数。
+
+启动器损坏时，仅在确认当前启动器指向的官方包元数据后才允许重装；包版本不会冒充可运行版本，重装后必须实际读取 CLI 版本。无法确认归属、独立二进制或预发布版本仍不自动修复。原因及处理方式见 [原生 npm 启动器升级说明](docs/native-npm-upgrades.md)。
+
+官方 `~/.opencode/bin/opencode`（Windows 为 `.exe`）安装支持 `opencode upgrade --method curl` 自升级，最新版通过对应版本线的 npm registry 元数据查询，不要求安装 Node.js。其他独立二进制、无法识别的版本和预发布版本不自动升级。
 
 跨大版本迁移需要另外处理插件、服务端 API 和终端配置，AgentUp 不自动卸载旧包、迁移配置或切换版本线。调研依据、各来源的命令和已知边界见 [OpenCode v1/v2 兼容说明](docs/opencode-versions.md)。
 
@@ -307,13 +311,14 @@ curl -fsSL https://raw.githubusercontent.com/rockychang7/agentup/main/uninstall.
 | 安装方式 | 升级命令 |
 |---------|---------|
 | npm | `npm install -g <package>@latest` |
+| Claude Code / OpenCode (npm) | `npm install -g --include=optional --ignore-scripts=false [--allow-scripts=<package>] <package>@latest`，按 npm 能力添加脚本授权 |
 | pnpm | `pnpm add -g <package>` |
 | yarn | `yarn global upgrade <package>` |
 | Homebrew (formula) | `brew upgrade <formula>` |
 | Homebrew (cask) | `brew upgrade --cask <formula>` |
 | winget | `winget upgrade <id>` |
 | scoop | `scoop update <package>` |
-| OpenCode v2 (pnpm) | `pnpm add -g --allow-build=@opencode/cli @opencode/cli@latest` |
+| Claude Code / OpenCode (pnpm) | `pnpm add -g --ignore-scripts=false --optional=true --allow-build=<package> <package>@latest` |
 | OpenCode v2 (yarn) | `yarn global add @opencode/cli@latest` |
 | OpenCode 官方目录自升级 | `<opencode 完整路径> upgrade --method curl` |
 | Agy 自升级 | `<agy 完整路径> update` |

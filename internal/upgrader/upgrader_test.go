@@ -284,7 +284,7 @@ func TestUpgradeAll_OneFailureDoesNotAffectOthers(t *testing.T) {
 		Stdout:   "@anthropic-ai/claude-code@1.0.21\n",
 		ExitCode: 0,
 	})
-	mr.SetResult("npm", []string{"install", "-g", "@anthropic-ai/claude-code@latest"}, runner.MockResult{
+	mr.SetResult("npm", []string{"install", "-g", "--include=optional", "--ignore-scripts=false", "@anthropic-ai/claude-code@latest"}, runner.MockResult{
 		Stderr:   "network error",
 		ExitCode: 1,
 	})

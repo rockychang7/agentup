@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/mod/semver"
+
 	"agentup/internal/config"
 	"agentup/internal/detector"
 	"agentup/internal/model"
@@ -53,7 +55,7 @@ func (u *Upgrader) SetStreamLogs(enabled bool) {
 func (u *Upgrader) Preview(info model.ToolInfo) ([]string, error) {
 	for _, tool := range u.tools {
 		if tool.Name == info.Name {
-			resolved, err := config.ForVersion(tool, info.Version)
+			resolved, err := config.ForVersion(tool, info.DistributionVersion())
 			if err != nil {
 				return nil, err
 			}
@@ -201,7 +203,7 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) mode
 
 	result.OldVersion = info.Version
 
-	resolved, err := config.ForVersion(tool, info.Version)
+	resolved, err := config.ForVersion(tool, info.DistributionVersion())
 	if err != nil {
 		result.Message = err.Error()
 		return result
@@ -269,18 +271,22 @@ func (u *Upgrader) upgradeTool(tool config.ToolConfig, info model.ToolInfo) mode
 
 	// Step 5: Determine success
 	result.Status = model.UpgradeStatusSuccess
-	if detectErr != nil || !newInfo.Installed || !knownVersion(result.NewVersion) || !knownVersion(result.OldVersion) {
+	previous := info.DistributionVersion()
+	if detectErr != nil || !newInfo.Installed || !knownVersion(result.NewVersion) || !knownVersion(previous) {
 		result.Status = model.UpgradeStatusUnverified
 		result.Outcome = model.OutcomeUnverified
 		result.Message = "upgrade command succeeded, but the version change could not be verified"
-	} else if err := config.ValidateUpgradeVersion(tool, result.OldVersion, result.NewVersion); err != nil {
+	} else if err := config.ValidateUpgradeVersion(tool, previous, result.NewVersion); err != nil {
 		result.Status = model.UpgradeStatusFailed
 		result.Outcome = model.OutcomeFailed
 		result.Message = fmt.Sprintf("upgrade verification failed: %v; check the package source and PATH", err)
-	} else if versionDecreased(result.OldVersion, result.NewVersion) {
+	} else if versionDecreased(previous, result.NewVersion) {
 		result.Status = model.UpgradeStatusFailed
 		result.Outcome = model.OutcomeFailed
 		result.Message = "installed version decreased; check the package source and PATH"
+	} else if !knownVersion(result.OldVersion) {
+		result.Outcome = model.OutcomeUpdated
+		result.Message = "CLI restored; the previous launcher could not report a version"
 	} else if result.NewVersion != result.OldVersion {
 		result.Outcome = model.OutcomeUpdated
 	} else {
@@ -304,10 +310,40 @@ func (u *Upgrader) buildUpgradeCommand(tool config.ToolConfig, method model.Inst
 		}
 		return binaryPath, tool.SelfUpdateArgs, nil
 	case model.InstallMethodNpm:
-		return "npm", []string{"install", "-g", tool.NpmPackage + "@latest"}, nil
+		args := []string{"install", "-g"}
+		if tool.NpmPostinstall {
+			version, err := u.managerVersion("npm")
+			if err != nil {
+				return "", nil, err
+			}
+			args = append(args, "--include=optional", "--ignore-scripts=false")
+			// npm 12 blocks unapproved dependency scripts even with ignore-scripts=false.
+			approvalRequired := semver.Compare(version, "v12.0.0") >= 0
+			if !approvalRequired {
+				// Some npm 11 releases also expose the approval policy.
+				out, _, exit, probeErr := u.runner.Run("npm", "config", "get", "allow-scripts")
+				approvalRequired = probeErr == nil && exit == 0 && strings.TrimSpace(out) != "undefined"
+			}
+			if approvalRequired {
+				args = append(args, "--allow-scripts="+tool.NpmPackage)
+			}
+		}
+		return "npm", append(args, tool.NpmPackage+"@latest"), nil
 	case model.InstallMethodPnpm:
-		if tool.Name == model.ToolOpenCode && tool.NpmPackage == "@opencode/cli" {
-			return "pnpm", []string{"add", "-g", "--allow-build=@opencode/cli", "@opencode/cli@latest"}, nil
+		if tool.NpmPostinstall {
+			version, err := u.managerVersion("pnpm")
+			if err != nil {
+				return "", nil, err
+			}
+			args := []string{"add", "-g", "--ignore-scripts=false", "--optional=true"}
+			if semver.Compare(version, "v10.0.0") >= 0 {
+				help, _, code, err := u.runner.Run("pnpm", "add", "--help")
+				if err != nil || code != 0 || !strings.Contains(help, "--allow-build") {
+					return "", nil, fmt.Errorf("pnpm cannot approve required postinstall scripts; upgrade pnpm to a version supporting --allow-build")
+				}
+				args = append(args, "--allow-build="+tool.NpmPackage)
+			}
+			return "pnpm", append(args, tool.NpmPackage+"@latest"), nil
 		}
 		return "pnpm", []string{"add", "-g", tool.NpmPackage}, nil
 	case model.InstallMethodYarn:
@@ -333,6 +369,18 @@ func (u *Upgrader) buildUpgradeCommand(tool config.ToolConfig, method model.Inst
 	default:
 		return "", nil, fmt.Errorf("install method '%s' does not support automatic upgrade", method)
 	}
+}
+
+func (u *Upgrader) managerVersion(name string) (string, error) {
+	out, stderr, code, err := u.runner.Run(name, "--version")
+	if err != nil {
+		return "", fmt.Errorf("cannot determine %s version for safe script approval: %w", name, err)
+	}
+	version := "v" + strings.TrimPrefix(strings.TrimSpace(out), "v")
+	if code != 0 || !semver.IsValid(version) {
+		return "", fmt.Errorf("cannot determine %s version for safe script approval: %s", name, strings.TrimSpace(out+"\n"+stderr))
+	}
+	return version, nil
 }
 
 // classifyError converts a raw execution error into a user-friendly message.

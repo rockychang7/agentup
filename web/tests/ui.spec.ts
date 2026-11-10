@@ -59,15 +59,20 @@ test('batch upgrades are confirmed and results stay on the row after reload', as
 })
 
 for (const scenario of [
-  { name: 'v1', command: ['npm', 'install', '-g', 'opencode-ai@latest'] },
-  { name: 'v2', command: ['pnpm', 'add', '-g', '--allow-build=@opencode/cli', '@opencode/cli@latest'] },
+  { name: 'v1', command: ['npm', 'install', '-g', '--include=optional', '--ignore-scripts=false', '--allow-scripts=opencode-ai', 'opencode-ai@latest'] },
+  { name: 'v2', command: ['pnpm', 'add', '-g', '--ignore-scripts=false', '--optional=true', '--allow-build=@opencode/cli', '@opencode/cli@latest'] },
   { name: 'native', command: ['C:\\Users\\Local User\\.opencode\\bin\\opencode.exe', 'upgrade', '--method', 'curl'] },
+  { name: 'broken', command: ['npm', 'install', '-g', '--include=optional', '--ignore-scripts=false', '--allow-scripts=@opencode/cli', '@opencode/cli@latest'] },
 ]) {
   test(`OpenCode ${scenario.name} displays and runs the matching upgrade command`, async ({ page }, info) => {
     await launch(page, `${info.project.name}-opencode-${scenario.name}`)
     const command = scenario.command.map(arg => /[\s"'`]/.test(arg) ? JSON.stringify(arg) : arg).join(' ')
     await page.getByRole('button', { name: 'Show details OpenCode CLI', exact: true }).click()
     await expect(page.getByText(command, { exact: true })).toBeVisible()
+    if (scenario.name === 'broken') {
+      await expect(lane(page, 'OpenCode CLI')).toContainText('Check failed')
+      await expect(lane(page, 'OpenCode CLI')).not.toContainText('Up to date')
+    }
     await noOverflow(page)
     const request = page.waitForRequest(req => new URL(req.url()).pathname === '/api/upgrades' && req.method() === 'POST')
     await page.getByRole('button', { name: 'Upgrade OpenCode CLI', exact: true }).click()

@@ -90,6 +90,9 @@ func TestDefaultTools_ClaudeCodeConfig(t *testing.T) {
 	if !claude.BrewCask {
 		t.Error("expected BrewCask to be true for claude-code")
 	}
+	if !claude.NpmPostinstall {
+		t.Error("Claude Code native launcher requires postinstall")
+	}
 }
 
 func TestDefaultTools_OpenCodeConfig(t *testing.T) {
@@ -115,6 +118,9 @@ func TestDefaultTools_OpenCodeConfig(t *testing.T) {
 	}
 	if opencode.BrewCask {
 		t.Error("expected BrewCask to be false for opencode")
+	}
+	if !opencode.NpmPostinstall {
+		t.Error("OpenCode native launcher requires postinstall")
 	}
 }
 

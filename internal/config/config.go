@@ -19,6 +19,7 @@ type ToolConfig struct {
 	BinaryAliases    []string
 	VersionArgs      []string
 	NpmPackage       string   // npm global package name
+	NpmPostinstall   bool     // native launchers require the official package's postinstall
 	BrewFormula      string   // brew formula or cask name
 	BrewCask         bool     // whether it's a cask
 	ScoopPackage     string   // scoop package name
@@ -98,6 +99,7 @@ func DefaultTools() []ToolConfig {
 			BinaryName:       "claude",
 			VersionArgs:      []string{"--version"},
 			NpmPackage:       "@anthropic-ai/claude-code",
+			NpmPostinstall:   true,
 			BrewFormula:      "claude-code",
 			BrewCask:         true,
 			ScoopPackage:     "",
@@ -113,6 +115,7 @@ func DefaultTools() []ToolConfig {
 			BinaryAliases:    []string{"opencode2"},
 			VersionArgs:      []string{"--version"},
 			NpmPackage:       "opencode-ai",
+			NpmPostinstall:   true,
 			BrewFormula:      "opencode",
 			BrewCask:         false,
 			ScoopPackage:     "opencode",

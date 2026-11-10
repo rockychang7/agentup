@@ -25,7 +25,7 @@ func (d *Detector) CheckLatest(info model.ToolInfo) model.ToolInfo {
 		if tool.Name != info.Name {
 			continue
 		}
-		resolved, err := config.ForVersion(tool, info.Version)
+		resolved, err := config.ForVersion(tool, info.DistributionVersion())
 		if err != nil {
 			info.CheckMessage = err.Error()
 			return info
@@ -33,7 +33,7 @@ func (d *Detector) CheckLatest(info model.ToolInfo) model.ToolInfo {
 		tool = resolved
 		latest, err := d.checkLatestVersion(tool, info.InstallMethod, info.Version)
 		if err == nil && latest != "" {
-			err = config.ValidateUpgradeVersion(tool, info.Version, latest)
+			err = config.ValidateUpgradeVersion(tool, info.DistributionVersion(), latest)
 		}
 		if err != nil {
 			info.LatestCheck = model.CheckFailed
@@ -43,6 +43,9 @@ func (d *Detector) CheckLatest(info model.ToolInfo) model.ToolInfo {
 			info.LatestVersion = latest
 			if validVersion(info.Version) {
 				info.UpgradeAvailable = compareVersions(info.Version, latest) < 0
+			} else if info.PackageVersion != "" {
+				info.LatestCheck = model.CheckFailed
+				info.CheckMessage = "installed package found, but the CLI cannot report a version; reinstall to restore the launcher"
 			}
 		} else {
 			info.CheckMessage = "no latest-version lookup for this installation source"

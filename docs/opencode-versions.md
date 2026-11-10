@@ -43,8 +43,10 @@ upgrade action.
 
 1. Resolve `opencode` from PATH first; use `opencode2` only if it is absent.
 2. Read the executable version and select the V1 or V2 distribution settings.
-   Missing, unknown, unsupported future majors, and prerelease versions do not
-   produce guessed upgrade commands.
+   When the launcher is broken, an official package manifest may identify the
+   line only after its bin target is matched to the active binary or npm shim.
+   The runtime version remains unknown until the repaired CLI actually runs.
+   Unattributed, unsupported future majors and prereleases are not guessed.
 3. Detect only the package belonging to that version line. A leftover V1 npm
    package must not classify the active V2 executable as a V1 package install.
 4. Query the selected package/formula. A result from another major line is a
@@ -60,14 +62,18 @@ upgrade action.
 
 | Source | V1 | V2 |
 | --- | --- | --- |
-| npm | `npm install -g opencode-ai@latest` | `npm install -g @opencode/cli@latest` |
-| pnpm | `pnpm add -g opencode-ai` | `pnpm add -g --allow-build=@opencode/cli @opencode/cli@latest` |
+| npm | `npm install -g --include=optional --ignore-scripts=false [--allow-scripts=opencode-ai] opencode-ai@latest` | `npm install -g --include=optional --ignore-scripts=false [--allow-scripts=@opencode/cli] @opencode/cli@latest` |
+| pnpm | `pnpm add -g --ignore-scripts=false --optional=true --allow-build=opencode-ai opencode-ai@latest` | `pnpm add -g --ignore-scripts=false --optional=true --allow-build=@opencode/cli @opencode/cli@latest` |
 | yarn | `yarn global upgrade opencode-ai` | `yarn global add @opencode/cli@latest` |
 | Homebrew | `brew upgrade opencode` | `brew upgrade anomalyco/tap/opencode-v2` |
 | Scoop | `scoop update opencode` | No automatic mapping |
 
 Homebrew's JSON identifies a tapped formula with a short `name` and a
 qualified `full_name`; both are recognized for the V2 lookup.
+
+The bracketed npm flag is added for npm 12+ and npm 11 releases exposing
+`allow-scripts`, not passed literally. See [native npm upgrades](native-npm-upgrades.md)
+for the November 10, 2026 postinstall-blocking investigation.
 
 ### Native Installations
 

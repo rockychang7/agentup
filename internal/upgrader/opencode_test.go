@@ -17,10 +17,10 @@ func TestPreviewOpenCodeReleaseLines(t *testing.T) {
 		method  model.InstallMethod
 		want    []string
 	}{
-		{"1.19.0", model.InstallMethodNpm, []string{"npm", "install", "-g", "opencode-ai@latest"}},
-		{"2.0.29", model.InstallMethodNpm, []string{"npm", "install", "-g", "@opencode/cli@latest"}},
-		{"1.19.0", model.InstallMethodPnpm, []string{"pnpm", "add", "-g", "opencode-ai"}},
-		{"2.0.29", model.InstallMethodPnpm, []string{"pnpm", "add", "-g", "--allow-build=@opencode/cli", "@opencode/cli@latest"}},
+		{"1.19.0", model.InstallMethodNpm, []string{"npm", "install", "-g", "--include=optional", "--ignore-scripts=false", "opencode-ai@latest"}},
+		{"2.0.29", model.InstallMethodNpm, []string{"npm", "install", "-g", "--include=optional", "--ignore-scripts=false", "@opencode/cli@latest"}},
+		{"1.19.0", model.InstallMethodPnpm, []string{"pnpm", "add", "-g", "--ignore-scripts=false", "--optional=true", "--allow-build=opencode-ai", "opencode-ai@latest"}},
+		{"2.0.29", model.InstallMethodPnpm, []string{"pnpm", "add", "-g", "--ignore-scripts=false", "--optional=true", "--allow-build=@opencode/cli", "@opencode/cli@latest"}},
 		{"1.19.0", model.InstallMethodYarn, []string{"yarn", "global", "upgrade", "opencode-ai"}},
 		{"2.0.29", model.InstallMethodYarn, []string{"yarn", "global", "add", "@opencode/cli@latest"}},
 		{"1.19.0", model.InstallMethodBrew, []string{"brew", "upgrade", "opencode"}},
@@ -35,7 +35,11 @@ func TestPreviewOpenCodeReleaseLines(t *testing.T) {
 		{"2.1.0-beta.1", model.InstallMethodNpm, nil},
 	} {
 		t.Run(tt.version+"/"+string(tt.method), func(t *testing.T) {
-			up := &Upgrader{tools: config.DefaultTools()}
+			mr := runner.NewMockRunner()
+			mr.SetResult("npm", []string{"--version"}, runner.MockResult{Stdout: "10.0.0"})
+			mr.SetResult("pnpm", []string{"--version"}, runner.MockResult{Stdout: "10.28.1"})
+			mr.SetResult("pnpm", []string{"add", "--help"}, runner.MockResult{Stdout: "--allow-build"})
+			up := &Upgrader{runner: mr, tools: config.DefaultTools()}
 			got, err := up.Preview(model.ToolInfo{Name: model.ToolOpenCode, Version: tt.version,
 				InstallMethod: tt.method, Path: "/mock/opencode"})
 			if tt.want == nil {
@@ -62,12 +66,12 @@ func TestUpgradeOpenCodeUsesResolvedPackage(t *testing.T) {
 			mr.SetResult("/mock/opencode", []string{"--version"}, runner.MockResult{Stdout: tt.version})
 			mr.SetResult("npm", []string{"--version"}, runner.MockResult{Stdout: "10.0.0"})
 			mr.SetResult("npm", []string{"list", "-g", tt.pkg, "--depth=0"}, runner.MockResult{Stdout: tt.pkg + "@" + tt.version})
-			mr.SetResult("npm", []string{"install", "-g", tt.pkg + "@latest"}, runner.MockResult{})
+			mr.SetResult("npm", []string{"install", "-g", "--include=optional", "--ignore-scripts=false", tt.pkg + "@latest"}, runner.MockResult{})
 			tools := config.DefaultTools()
 			up := New(mr, macPlatform(), detector.NewWithoutLatestCheck(mr, macPlatform(), tools), tools)
 			result, err := up.Upgrade(model.ToolOpenCode)
 			if err != nil || result.Status != model.UpgradeStatusSuccess ||
-				!reflect.DeepEqual(result.Command, []string{"npm", "install", "-g", tt.pkg + "@latest"}) {
+				!reflect.DeepEqual(result.Command, []string{"npm", "install", "-g", "--include=optional", "--ignore-scripts=false", tt.pkg + "@latest"}) {
 				t.Fatalf("wrong upgrade command: %+v, %v", result, err)
 			}
 		})
@@ -147,7 +151,7 @@ func TestUpgradeOpenCodeVerifiesReleaseLine(t *testing.T) {
 				pkg = "@opencode/cli"
 			}
 			mr.SetResult("npm", []string{"list", "-g", pkg, "--depth=0"}, runner.MockResult{Stdout: pkg + "@" + tt.before})
-			mr.SetResult("npm", []string{"install", "-g", pkg + "@latest"}, runner.MockResult{})
+			mr.SetResult("npm", []string{"install", "-g", "--include=optional", "--ignore-scripts=false", pkg + "@latest"}, runner.MockResult{})
 			r := &openCodeUpgradeRunner{MockRunner: mr, after: tt.after}
 			tools := config.DefaultTools()
 			up := New(r, macPlatform(), detector.NewWithoutLatestCheck(r, macPlatform(), tools), tools)

@@ -80,6 +80,7 @@ type ToolInfo struct {
 	Name             ToolName      `json:"name"`
 	Installed        bool          `json:"installed"`
 	Version          string        `json:"version"`
+	PackageVersion   string        `json:"package_version,omitempty"`
 	LatestVersion    string        `json:"latest_version"`
 	UpgradeAvailable bool          `json:"upgrade_available"`
 	InstallMethod    InstallMethod `json:"install_method"`
@@ -87,6 +88,14 @@ type ToolInfo struct {
 	UpgradeSupported bool          `json:"upgrade_supported"`
 	LatestCheck      CheckStatus   `json:"latest_check"`
 	CheckMessage     string        `json:"check_message,omitempty"`
+}
+
+// DistributionVersion may identify a broken launcher, but does not prove it runs.
+func (info ToolInfo) DistributionVersion() string {
+	if info.Version == "" || info.Version == "unknown" {
+		return info.PackageVersion
+	}
+	return info.Version
 }
 
 // UpgradeResult holds the result of an upgrade operation for a single tool.

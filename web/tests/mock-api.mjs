@@ -78,7 +78,8 @@ function newSession(key) {
       upgrade_available: i < 2, install_method: i === 3 ? 'self-update' : 'npm',
       path: i === 2 ? '' : `C:\\Users\\Local User\\AppData\\Roaming\\npm\\${name}.cmd`,
       upgrade_supported: i !== 2, latest_check: i === 3 ? 'unavailable' : 'checked',
-      command: i === 2 ? [] : i === 3 ? ['C:\\tools\\agy.exe', 'update'] : ['npm', 'install', '-g', i === 0 ? '@openai/codex@latest' : '@anthropic-ai/claude-code@latest'],
+      command: i === 2 ? [] : i === 3 ? ['C:\\tools\\agy.exe', 'update'] : i === 0 ? ['npm', 'install', '-g', '@openai/codex@latest']
+        : ['npm', 'install', '-g', '--include=optional', '--ignore-scripts=false', '--allow-scripts=@anthropic-ai/claude-code', '@anthropic-ai/claude-code@latest'],
     })),
   }
   state.desktop = desktopFixture(key.includes('-desktop-'))
@@ -93,19 +94,21 @@ function newSession(key) {
     delete info.plan
     Object.assign(info, { running: 'running', capability: 'blocked', reason: 'app_running' })
   }
-  const scenario = key.match(/-opencode-(v1|v2|native)$/)?.[1]
+  const scenario = key.match(/-opencode-(v1|v2|native|broken)$/)?.[1]
   if (scenario) {
     const nativePath = 'C:\\Users\\Local User\\.opencode\\bin\\opencode.exe'
     const v1 = scenario === 'v1'
     Object.assign(state.agents.find(agent => agent.name === 'opencode'), {
-      installed: true, version: v1 ? '1.18.0' : '2.0.28',
-      latest_version: v1 ? '1.19.0' : '2.0.29', upgrade_available: true,
-      upgrade_supported: true, latest_check: 'checked',
-      install_method: scenario === 'native' ? 'self-update' : v1 ? 'npm' : 'pnpm',
+      installed: true, version: scenario === 'broken' ? 'unknown' : v1 ? '1.18.0' : '2.0.28',
+      latest_version: v1 ? '1.19.0' : '2.0.29', upgrade_available: scenario !== 'broken',
+      upgrade_supported: true, latest_check: scenario === 'broken' ? 'failed' : 'checked',
+      ...(scenario === 'broken' ? { package_version: '2.0.28', check_message: 'Installed package found, but the CLI cannot report a version; reinstall to restore the launcher' } : {}),
+      install_method: scenario === 'native' ? 'self-update' : v1 || scenario === 'broken' ? 'npm' : 'pnpm',
       path: scenario === 'native' ? nativePath : 'C:\\Users\\Local User\\AppData\\Roaming\\npm\\opencode.cmd',
       command: scenario === 'native' ? [nativePath, 'upgrade', '--method', 'curl']
-        : v1 ? ['npm', 'install', '-g', 'opencode-ai@latest']
-          : ['pnpm', 'add', '-g', '--allow-build=@opencode/cli', '@opencode/cli@latest'],
+        : v1 ? ['npm', 'install', '-g', '--include=optional', '--ignore-scripts=false', '--allow-scripts=opencode-ai', 'opencode-ai@latest']
+          : scenario === 'broken' ? ['npm', 'install', '-g', '--include=optional', '--ignore-scripts=false', '--allow-scripts=@opencode/cli', '@opencode/cli@latest']
+            : ['pnpm', 'add', '-g', '--ignore-scripts=false', '--optional=true', '--allow-build=@opencode/cli', '@opencode/cli@latest'],
     })
   }
   return { state, streams: new Set(), stopped: false }

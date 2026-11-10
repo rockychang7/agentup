@@ -145,8 +145,11 @@ func (d *Detector) detectLocal(tool config.ToolConfig) model.ToolInfo {
 
 	// Step 2: Get the version
 	info.Version = d.getVersion(tool, path)
+	if info.Version == "unknown" && tool.NpmPostinstall {
+		info.PackageVersion = installedPackageVersion(tool, path)
+	}
 
-	resolved, err := config.ForVersion(tool, info.Version)
+	resolved, err := config.ForVersion(tool, info.DistributionVersion())
 	if err != nil {
 		info.UpgradeSupported = false
 		return info

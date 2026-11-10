@@ -7,6 +7,7 @@ export interface Agent {
   name: ToolName
   installed: boolean
   version: string
+  package_version?: string
   latest_version: string
   upgrade_available: boolean
   install_method: string
