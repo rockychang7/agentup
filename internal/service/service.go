@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"agentup/internal/config"
-	"agentup/internal/desktop"
 	"agentup/internal/detector"
 	"agentup/internal/diagnostic"
 	"agentup/internal/model"
@@ -62,32 +61,29 @@ type Task struct {
 }
 
 type State struct {
-	Version      string              `json:"version"`
-	OS           string              `json:"os"`
-	Arch         string              `json:"arch"`
-	Agents       []Agent             `json:"agents"`
-	Tasks        []Task              `json:"tasks"`
-	Doctor       *model.DoctorResult `json:"doctor"`
-	Scanning     bool                `json:"scanning"`
-	Diagnosing   bool                `json:"diagnosing"`
-	ActiveTasks  []string            `json:"active_tasks"`
-	Offline      bool                `json:"offline"`
-	Revision     uint64              `json:"revision"`
-	Desktop      desktop.Snapshot    `json:"desktop"`
-	DesktopTasks []DesktopTask       `json:"desktop_tasks"`
+	Version     string              `json:"version"`
+	OS          string              `json:"os"`
+	Arch        string              `json:"arch"`
+	Agents      []Agent             `json:"agents"`
+	Tasks       []Task              `json:"tasks"`
+	Doctor      *model.DoctorResult `json:"doctor"`
+	Scanning    bool                `json:"scanning"`
+	Diagnosing  bool                `json:"diagnosing"`
+	ActiveTasks []string            `json:"active_tasks"`
+	Offline     bool                `json:"offline"`
+	Revision    uint64              `json:"revision"`
 }
 
 type Service struct {
-	mu             sync.Mutex
-	ctx            context.Context
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	r              runner.Runner
-	p              platform.Platform
-	tools          []config.ToolConfig
-	state          State
-	subs           map[chan struct{}]struct{}
-	desktopManager desktopBackend
+	mu     sync.Mutex
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	r      runner.Runner
+	p      platform.Platform
+	tools  []config.ToolConfig
+	state  State
+	subs   map[chan struct{}]struct{}
 	// fingerprint covers what a confirmation shows; Revision only moves when it changes.
 	fingerprint [32]byte
 	resources   map[string]*sync.Mutex
@@ -100,10 +96,8 @@ func New(ctx context.Context, version, arch string, r runner.Runner, p platform.
 		r = &runner.DefaultRunner{Context: ctx}
 	}
 	s := &Service{ctx: ctx, cancel: cancel, r: r, p: p, tools: tools, subs: make(map[chan struct{}]struct{}),
-		desktopManager: desktop.New(ctx, r, p.Name(), arch), resources: make(map[string]*sync.Mutex)}
+		resources: make(map[string]*sync.Mutex)}
 	s.state = State{Version: version, OS: p.Name(), Arch: arch, Agents: []Agent{}, Tasks: []Task{}, ActiveTasks: []string{}}
-	s.state.Desktop = desktop.Snapshot{Installations: []desktop.Installation{}, Issues: []string{}}
-	s.state.DesktopTasks = []DesktopTask{}
 	for _, tool := range tools {
 		s.state.Agents = append(s.state.Agents, Agent{ToolInfo: model.ToolInfo{Name: tool.Name, LatestCheck: model.CheckPending}})
 	}
@@ -157,8 +151,7 @@ func (s *Service) changedLocked() {
 	data, _ := json.Marshal(struct {
 		Offline bool
 		Agents  []Agent
-		Desktop desktop.Snapshot
-	}{s.state.Offline, s.state.Agents, s.state.Desktop})
+	}{s.state.Offline, s.state.Agents})
 	if sum := sha256.Sum256(data); sum != s.fingerprint {
 		s.fingerprint = sum
 		s.state.Revision++
@@ -233,13 +226,6 @@ func (s *Service) activeLocked(key string) bool {
 				}
 			}
 		}
-		if task := s.desktopTaskLocked(id); task != nil {
-			for _, item := range task.Items {
-				if item.Installation == key {
-					return true
-				}
-			}
-		}
 	}
 	return false
 }
@@ -309,35 +295,9 @@ func (s *Service) scan(offline bool) {
 	if s.ctx.Err() != nil {
 		return
 	}
-	// Installed versions are shown first; latest versions follow like CLI rows.
-	snapshot := s.desktopManager.Scan(true)
 	if !offline {
-		snapshot.Installations = append([]desktop.Installation{}, snapshot.Installations...)
-		for i := range snapshot.Installations {
-			if snapshot.Installations[i].Installed {
-				snapshot.Installations[i].LatestCheck = model.CheckPending
-			}
-		}
+		d.CheckAllLatest(local, set)
 	}
-	s.setDesktop(snapshot)
-	if offline || s.ctx.Err() != nil {
-		return
-	}
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.setDesktop(s.desktopManager.Scan(false))
-	}()
-	d.CheckAllLatest(local, set)
-	wg.Wait()
-}
-
-func (s *Service) setDesktop(snapshot desktop.Snapshot) {
-	s.mu.Lock()
-	s.state.Desktop = snapshot
-	s.changedLocked()
-	s.mu.Unlock()
 }
 
 func (s *Service) Diagnose() error {

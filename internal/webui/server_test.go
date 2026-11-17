@@ -303,3 +303,23 @@ func TestShutdownProtectsActiveUpgradeUnlessForced(t *testing.T) {
 		t.Fatal("forced shutdown accepted new work", err)
 	}
 }
+
+func TestOnlyCLIManagementIsExposed(t *testing.T) {
+	s := fixture(t)
+	response := perform(s, "GET", "/api/state", "", true, false)
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"desktop", "desktop_tasks"} {
+		if _, ok := state[field]; ok {
+			t.Fatalf("removed state field remains: %s", field)
+		}
+	}
+	for _, path := range []string{"/api/desktop/upgrades", "/api/desktop/stop"} {
+		response := perform(s, "POST", path, "{}", true, true)
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("removed endpoint %s returned %d", path, response.Code)
+		}
+	}
+}

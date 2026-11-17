@@ -7,7 +7,6 @@ import { APIError, request, useSession } from './api'
 import { dictionaries, initialLanguage } from './i18n'
 import type { Dictionary, Language } from './i18n'
 import { Overview } from './Overview'
-import type { KindFilter } from './Overview'
 import { preference, remember } from './preferences'
 import { toolLabels } from './types'
 import type { Doctor } from './types'
@@ -20,7 +19,6 @@ export function App() {
   const [language, setLanguage] = useState<Language>(initialLanguage)
   const [theme, setTheme] = useState(() => preference('theme') === 'light' ? 'light' : 'dark')
   const [page, setPage] = useState<Page>('agents')
-  const [kind, setKind] = useState<KindFilter>('cli')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [stopConfirmation, setStopConfirmation] = useState(false)
@@ -87,10 +85,8 @@ export function App() {
             {page === 'doctor' && <button className="button primary" disabled={busy} onClick={() => void act('doctor', {})}><Activity className={state.diagnosing ? 'pulse' : ''} size={15} />{state.diagnosing ? t.diagnosing : t.diagnose}</button>}
           </div>
         </div>
-        {page === 'agents' && <Overview state={state} t={t} locked={locked} submitting={submitting} kind={kind} setKind={setKind} onError={setError}
-          onUpgradeCli={(tools, done) => void act('upgrades', { tools, revision: state.revision }, done)}
-          onRunDesktop={(plans, revision, done) => void act('desktop/upgrades', { plans, revision }, done)}
-          onStopDesktop={(installation, revision, done) => void act('desktop/stop', { installation_id: installation, revision }, done)} />}
+        {page === 'agents' && <Overview state={state} t={t} locked={locked} submitting={submitting} onError={setError}
+          onUpgradeCli={(tools, done) => void act('upgrades', { tools, revision: state.revision }, done)} />}
         {page === 'doctor' && <DoctorView doctor={state.doctor} diagnosing={state.diagnosing} t={t} onError={setError} />}
         <footer><span><ShieldCheck size={13} />{state.offline ? t.readOnly : t.local} · 127.0.0.1</span><span>AgentUp <span className="mono">{state.version}</span></span></footer>
       </>}

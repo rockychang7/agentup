@@ -1,12 +1,11 @@
 # AgentUp
 
-跨平台本地工具，用于统一检测和升级本机安装的 AI Coding Agent CLI 与 Desktop 应用，提供命令行与本地 Web UI；默认命令仍只管理 CLI。
+跨平台本地工具，用于统一检测和升级本机安装的 AI Coding Agent CLI，提供命令行与本地 Web UI。
 
 ## 功能特性
 
 - **状态概览**：直接运行 `agentup`，以彩色紧凑列表查看版本、安装来源和更新状态；详细路径按需展开
 - **本地 Web UI**：`agentup ui` 打开 Agent 概览和环境诊断；完整中英文切换，支持深色与浅色主题
-- **Desktop 分级管理**：三平台检测安装实例和最新版本、预览升级计划；按安装来源走 Homebrew Cask、WinGet、官方安装包（下载并校验签名）或 Linux 授权命令，其余给官方入口；Antigravity 仅管理 app，不管理 IDE
 - **确认与实时日志**：Web UI 单项或批量升级前展示实际命令；执行中实时推送日志，刷新页面后恢复当前会话任务
 - **自动识别安装方式**：识别 npm、pnpm、yarn、Homebrew、winget、scoop 等安装方式
 - **升级进度**：显示检测、等待、升级、验证阶段及耗时；同一包管理器串行升级，不同来源并行执行
@@ -43,25 +42,6 @@ Claude Code 和 OpenCode 的 npm 升级显式包含原生可选依赖并启用 p
 官方 `~/.opencode/bin/opencode`（Windows 为 `.exe`）安装支持 `opencode upgrade --method curl` 自升级，最新版通过对应版本线的 npm registry 元数据查询，不要求安装 Node.js。其他独立二进制、无法识别的版本和预发布版本不自动升级。
 
 跨大版本迁移需要另外处理插件、服务端 API 和终端配置，AgentUp 不自动卸载旧包、迁移配置或切换版本线。调研依据、各来源的命令和已知边界见 [OpenCode v1/v2 兼容说明](docs/opencode-versions.md)。
-
-## Desktop 管理
-
-Desktop 与 CLI 分别管理，不共享版本、包名或默认升级目标：
-
-```bash
-agentup list --kind desktop
-agentup list --kind desktop --offline --json
-agentup list --kind all --offline --json
-agentup upgrade codex --kind desktop        # 仅预览
-agentup upgrade codex --kind desktop --yes  # 确认生成的计划
-agentup upgrade --kind desktop --yes        # 仅批量执行可自动升级项
-```
-
-支持检测 ChatGPT/Codex Desktop、Claude Desktop、OpenCode Desktop、Antigravity app。**不管理 Antigravity IDE**，不接管旧版 1.x IDE，不切换安装来源或执行产品迁移。
-
-macOS Homebrew Cask、Windows WinGet、OpenCode 官方安装包和 Linux APT/DNF 授权命令全部默认开启：身份、来源、路径、版本线、架构和退出状态都能确认时就按对应方式升级，确认不了时才转为官方入口引导（结果为 `handed_off`，不是升级成功）。详见 [当前支持范围](docs/desktop-support.md)。
-
-多份桌面安装需要通过 `--instance <ID>` 明确目标。Desktop 命令不带 `--yes` 只展示计划，离线模式不执行操作。Web UI 按 Agent 分组，同时列出 CLI 与桌面 App，并用不同颜色的类型标签区分；CLI 与桌面 App 分别确认和执行。三平台的完整方案与实施顺序见 [桌面 App 检测与升级方案](docs/desktop-upgrade-plan.md)。
 
 ## 安装
 
@@ -128,9 +108,8 @@ agentup ui stop --all
 
 停止命令默认拒绝中断正在执行的升级；检测和诊断可以取消。确实需要中断升级时，可执行 `agentup ui stop --port 8765 --force` 或 `agentup ui stop --all --force`。强制停止会取消子进程，但不回滚已发生的包管理器修改。命令等待实例清理完成后返回，随后可运行自身更新或卸载。
 
-- **Agent 概览**：命令行 CLI 和桌面 App 分两个视图；查看版本和安装来源，筛选有更新或已安装项，展开路径与升级命令
-- **升级**：单行点“升级”直接开始，按钮原地显示进度；批量升级和需要打开安装窗口的升级先确认。结果和命令输出留在那一行的详情里
-- **桌面 App**：应用正在运行时可在确认后由 AgentUp 退出；升级成功后应用保持关闭。Linux 上需要管理员权限的升级会弹出系统密码框
+- **Agent 概览**：查看版本和安装来源，筛选有更新或已安装项，展开路径与升级命令
+- **升级**：单行点“升级”直接开始，按钮原地显示进度；批量升级先确认。结果和命令输出留在那一行的详情里
 - **环境诊断**：检查包管理器、Agent 路径和自动升级能力，支持复制诊断报告
 - **中英文与主题**：界面语言、日期和业务状态随语言切换，记住语言与深浅主题；第三方命令的原始输出不翻译
 - **离线只读**：跳过最新版查询，允许本机检测和诊断；前后端均拒绝升级操作

@@ -27,23 +27,9 @@ Examples:
   agentup upgrade              # Upgrade all installed tools
   agentup upgrade codex        # Upgrade only codex
   agentup upgrade claude-code  # Upgrade only claude-code
-  agentup upgrade agentup      # Upgrade agentup itself
-  agentup upgrade codex --kind desktop       # Preview Desktop plan
-  agentup upgrade codex --kind desktop --yes # Confirm Desktop plan`,
+  agentup upgrade agentup      # Upgrade agentup itself`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		kind, err := selectedKind(cmd)
-		if err != nil {
-			return err
-		}
-		if kind != "cli" {
-			return runDesktopUpgrade(cmd, args)
-		}
-		for _, flag := range []string{"yes", "instance"} {
-			if cmd.Flags().Changed(flag) {
-				return fmt.Errorf("--%s is only supported with --kind desktop", flag)
-			}
-		}
 		var target model.ToolName
 		if len(args) > 0 {
 			toolName := args[0]

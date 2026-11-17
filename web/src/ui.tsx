@@ -15,14 +15,6 @@ export function IconButton({ label, children, onClick, disabled = false }: {
   return <button type="button" className="icon-button" title={label} aria-label={label} disabled={disabled} onClick={onClick}>{children}</button>
 }
 
-// Only official update pages open from the browser.
-export function safeURL(value?: string) {
-  try {
-    const url = new URL(value || '')
-    return url.protocol === 'https:' && ['chatgpt.com', 'claude.com', 'opencode.ai', 'antigravity.google'].includes(url.hostname) ? url.href : ''
-  } catch { return '' }
-}
-
 export function CopyButton({ value, t, onError }: { value: string; t: Dictionary; onError: (code: string) => void }) {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
@@ -49,10 +41,9 @@ export function label(t: Dictionary, key: string) {
 }
 
 const sourceKeys: Record<string, keyof Dictionary> = {
-  'self-update': 'selfUpdate', binary: 'binary', unknown: 'unknown', msix: 'srcMsix', installer: 'srcInstaller',
-  'app-bundle': 'srcDirect', portable: 'srcPortable',
+  'self-update': 'selfUpdate', binary: 'binary', unknown: 'unknown',
 }
-const sourceNames: Record<string, string> = { brew: 'Homebrew', 'brew-cask': 'Homebrew', apt: 'APT', rpm: 'RPM', flatpak: 'Flatpak', snap: 'Snap', appimage: 'AppImage' }
+const sourceNames: Record<string, string> = { brew: 'Homebrew', 'brew-cask': 'Homebrew' }
 
 // Install sources are internal codes; show readable names and keep the code in details.
 export function sourceLabel(source: string, t: Dictionary) {

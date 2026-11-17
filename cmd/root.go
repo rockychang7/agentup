@@ -39,7 +39,7 @@ var (
 // rootCmd is the base command.
 var rootCmd = &cobra.Command{
 	Use:           "agentup",
-	Short:         "Detect and upgrade local AI agent CLIs and desktop apps",
+	Short:         "Detect and upgrade local AI agent CLIs",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	Args:          cobra.NoArgs,
